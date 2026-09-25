@@ -1,41 +1,58 @@
 import { AGENT_DEFS, INPUT_CYCLES, LINK, RESOURCES } from './defs';
+import { CARDS, CORES, type CardId, type CoreId, type Design, TOOLS, type ToolId, isMachine } from './designs';
 import type { GameMap } from './map';
-import type { AgentType, ResourceId } from './types';
+import type { AgentType, Item, ResourceId } from './types';
 import { World } from './world';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 export interface SaveData {
   version: typeof SAVE_VERSION;
   time: number;
+  rng: number;
+  designs: Design[];
+  active: Partial<Record<AgentType, string>>;
   agents: {
     id: number;
     type: AgentType;
     x: number;
     y: number;
+    designId: string | null;
     produced: number;
     progress: number;
     running: boolean;
+    contaminated: boolean;
+    defects: number;
+    wasted: number;
     inputs: Partial<Record<ResourceId, number>>;
-    buffer: ResourceId[];
+    badInputs: Partial<Record<ResourceId, number>>;
+    buffer: Item[];
   }[];
-  connections: { from: number; to: number; items: { res: ResourceId; pos: number }[] }[];
+  connections: { from: number; to: number; items: { res: ResourceId; bad: boolean; pos: number }[] }[];
 }
 
 export function serialize(world: World): SaveData {
   return {
     version: SAVE_VERSION,
     time: world.time,
-    agents: [...world.agents.values()].map(({ id, type, x, y, produced, progress, running, inputs, buffer }) => ({
-      id,
-      type,
-      x,
-      y,
-      produced,
-      progress,
-      running,
-      inputs: { ...inputs },
-      buffer: [...buffer],
+    rng: world.rng.state,
+    designs: [...world.designs.values()].filter((d) => !d.factory).map((d) => ({ ...d, cards: [...d.cards] })),
+    active: { ...world.activeDesign },
+    agents: [...world.agents.values()].map((a) => ({
+      id: a.id,
+      type: a.type,
+      x: a.x,
+      y: a.y,
+      designId: a.designId,
+      produced: a.produced,
+      progress: a.progress,
+      running: a.running,
+      contaminated: a.contaminated,
+      defects: a.defects,
+      wasted: a.wasted,
+      inputs: { ...a.inputs },
+      badInputs: { ...a.badInputs },
+      buffer: a.buffer.map((i) => ({ ...i })),
     })),
     connections: [...world.connections.values()].map(({ from, to, items }) => ({ from, to, items: items.map((i) => ({ ...i })) })),
   };
@@ -45,36 +62,82 @@ const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Numb
 const isRes = (v: unknown): v is ResourceId => typeof v === 'string' && v in RESOURCES;
 const isType = (v: unknown): v is AgentType => typeof v === 'string' && v in AGENT_DEFS;
 
+/** Aceita item novo ({res, bad}) ou antigo (só o id do recurso). */
+function toItem(v: unknown): Item | null {
+  if (isRes(v)) return { res: v, bad: false };
+  const o = v as { res?: unknown; bad?: unknown } | null;
+  return o && isRes(o.res) ? { res: o.res, bad: o.bad === true } : null;
+}
+
+function readDesign(raw: Record<string, unknown>): Design | null {
+  if (typeof raw.id !== 'string' || !isType(raw.role) || !isMachine(raw.role)) return null;
+  const core = raw.core as CoreId;
+  const tool = raw.tool as ToolId;
+  if (!(core in CORES) || !(tool in TOOLS) || !TOOLS[tool].roles.includes(raw.role)) return null;
+  const cards = (Array.isArray(raw.cards) ? raw.cards : []).filter((c): c is CardId => typeof c === 'string' && c in CARDS).slice(0, CORES[core].slots);
+  return {
+    id: raw.id,
+    name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.slice(0, 40) : `${AGENT_DEFS[raw.role].name} v${num(raw.version, 2)}`,
+    role: raw.role,
+    core,
+    tool,
+    cards,
+    version: Math.max(2, Math.floor(num(raw.version, 2))),
+    factory: false,
+  };
+}
+
 /**
- * Reconstrói o mundo a partir de um save (v3; v2 do M2 e v1 do M1 são migrados).
+ * Reconstrói o mundo a partir de um save (v4; v1–v3 são migrados — agentes viram "v1 de fábrica").
  * Lança erro se o formato for inválido.
  */
 export function deserialize(data: unknown, map: GameMap): World {
   const d = data as Record<string, unknown> | null;
-  if (!d || typeof d !== 'object' || !Array.isArray(d.agents) || ![1, 2, 3].includes(d.version as number)) {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.agents) || ![1, 2, 3, 4].includes(d.version as number)) {
     throw new Error('Save inválido ou de outra versão');
   }
   const world = new World(map);
   world.time = num(d.time);
-  const idMap = new Map<number, number>();
+  if (typeof d.rng === 'number') world.rng.state = d.rng | 0;
 
+  if (Array.isArray(d.designs)) {
+    for (const raw of d.designs as Record<string, unknown>[]) {
+      const design = readDesign(raw);
+      if (design) world.addDesign(design);
+    }
+  }
+  if (d.active && typeof d.active === 'object') {
+    for (const id of Object.values(d.active as Record<string, unknown>)) if (typeof id === 'string') world.setActive(id);
+  }
+
+  const idMap = new Map<number, number>();
   for (const raw of d.agents as Record<string, unknown>[]) {
     if (!isType(raw.type)) continue;
-    const res = world.place(raw.type, num(raw.x, -1), num(raw.y, -1));
+    const designId = typeof raw.designId === 'string' && world.designs.get(raw.designId)?.role === raw.type ? raw.designId : undefined;
+    // Sem versão válida → a de fábrica (não a ativa), para não mudar agentes antigos
+    const res = world.place(raw.type, num(raw.x, -1), num(raw.y, -1), designId ?? (isMachine(raw.type) ? `f-${raw.type}` : undefined));
     if (!res.ok) continue;
     const a = res.agent;
     const def = AGENT_DEFS[a.type];
     a.produced = num(raw.produced);
+    a.defects = num(raw.defects);
+    a.wasted = num(raw.wasted);
     // v1/v2 guardavam a fração do próximo item em `acc`
     a.progress = Math.min(1, Math.max(0, num(raw.progress ?? raw.acc)));
     a.running = raw.running === true && !!def.recipe;
+    a.contaminated = a.running && raw.contaminated === true;
     if (!a.running && Object.keys(def.recipe?.inputs ?? {}).length > 0) a.progress = 0;
-    if (Array.isArray(raw.buffer)) a.buffer = raw.buffer.filter(isRes).slice(0, def.capacity);
-    if (raw.inputs && typeof raw.inputs === 'object' && def.recipe) {
-      for (const [k, v] of Object.entries(raw.inputs as Record<string, unknown>)) {
-        const need = def.recipe.inputs[k as ResourceId];
-        if (isRes(k) && need) a.inputs[k] = Math.min(need * INPUT_CYCLES, Math.max(0, Math.floor(num(v))));
+    if (Array.isArray(raw.buffer)) a.buffer = raw.buffer.map(toItem).filter((i): i is Item => !!i).slice(0, def.capacity);
+    if (def.recipe) {
+      for (const [field, target] of [['inputs', a.inputs], ['badInputs', a.badInputs]] as const) {
+        const src = raw[field];
+        if (!src || typeof src !== 'object') continue;
+        for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+          const need = def.recipe.inputs[k as ResourceId];
+          if (isRes(k) && need) target[k] = Math.min(need * INPUT_CYCLES, Math.max(0, Math.floor(num(v))));
+        }
       }
+      for (const k of Object.keys(a.badInputs) as ResourceId[]) a.badInputs[k] = Math.min(a.badInputs[k]!, a.inputs[k] ?? 0);
     }
     if (typeof raw.id === 'number') idMap.set(raw.id, a.id);
   }
@@ -89,7 +152,7 @@ export function deserialize(data: unknown, map: GameMap): World {
       if (!res.ok || !Array.isArray(raw.items)) continue;
       const items = (raw.items as Record<string, unknown>[])
         .filter((i) => isRes(i.res))
-        .map((i) => ({ res: i.res as ResourceId, pos: Math.min(res.connection.length, Math.max(0, num(i.pos))) }))
+        .map((i) => ({ res: i.res as ResourceId, bad: i.bad === true, pos: Math.min(res.connection.length, Math.max(0, num(i.pos))) }))
         .sort((x, y) => y.pos - x.pos);
       let limit = res.connection.length;
       for (const it of items) {

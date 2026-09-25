@@ -1,0 +1,47 @@
+.ws {
+  position: fixed; top: 80px; right: 16px; bottom: 16px; width: 400px;
+  background: rgba(20, 24, 33, 0.97); border: 1px solid #2c3444; border-radius: 10px;
+  color: #e8ecf3; font: 13px/1.4 Inter, "Segoe UI", system-ui, sans-serif;
+  display: none; flex-direction: column; overflow: hidden; z-index: 10;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.ws.open { display: flex; }
+.ws header { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid #2c3444; }
+.ws header h2 { margin: 0; font-size: 13px; letter-spacing: 0.08em; color: #5ec8ff; }
+.ws .body { overflow-y: auto; padding: 10px 14px 14px; flex: 1; }
+.ws h3 { margin: 14px 0 6px; font-size: 11px; letter-spacing: 0.06em; color: #8b95a7; text-transform: uppercase; }
+.ws button {
+  font: inherit; color: #e8ecf3; background: #1f2531; border: 1px solid #2c3444; border-radius: 6px;
+  padding: 5px 10px; cursor: pointer;
+}
+.ws button:hover:not(:disabled) { background: #2a3242; }
+.ws button:disabled { opacity: 0.4; cursor: default; }
+.ws button.primary { border-color: #5ec8ff; color: #5ec8ff; }
+.ws button.on { border-color: #5ec8ff; background: #17314a; }
+.ws .x { background: none; border: none; font-size: 18px; color: #8b95a7; padding: 0 4px; }
+.ws .list { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto; border: 1px solid #232a37; border-radius: 6px; padding: 4px; }
+.ws .role { font-size: 11px; color: #8b95a7; padding: 4px 6px 0; }
+.ws .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 8px; border-radius: 5px; cursor: pointer; }
+.ws .row:hover { background: #1f2531; }
+.ws .row.sel { background: #17314a; }
+.ws .badge { font-size: 10px; color: #8b95a7; margin-left: 6px; }
+.ws .badge.star { color: #facc15; }
+.ws .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.ws .cards { display: flex; flex-direction: column; gap: 4px; }
+.ws .card { display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left; }
+.ws .card small { color: #8b95a7; }
+.ws .slots { display: flex; gap: 4px; flex-wrap: wrap; }
+.ws .slot { min-width: 84px; padding: 5px 8px; border: 1px dashed #2c3444; border-radius: 6px; color: #8b95a7; font-size: 12px; text-align: center; }
+.ws .slot.filled { border-style: solid; border-color: #4fd1c5; color: #e8ecf3; cursor: pointer; }
+.ws input[type=text] { width: 100%; box-sizing: border-box; font: inherit; color: #e8ecf3; background: #0f131a; border: 1px solid #2c3444; border-radius: 6px; padding: 6px 8px; }
+.ws table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ws td, .ws th { padding: 4px 6px; text-align: right; border-bottom: 1px solid #232a37; }
+.ws td:first-child, .ws th:first-child { text-align: left; color: #8b95a7; }
+.ws th { font-weight: 600; color: #8b95a7; }
+.ws .up { color: #4ade80; }
+.ws .down { color: #f87171; }
+.ws .bar { height: 6px; background: #0f131a; border-radius: 3px; overflow: hidden; margin: 8px 0 4px; }
+.ws .bar > div { height: 100%; background: #5ec8ff; width: 0; }
+.ws .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.ws .note { color: #8b95a7; font-size: 12px; margin: 6px 0; }
+.ws .ask { margin-top: 10px; padding: 10px; border: 1px solid #5ec8ff; border-radius: 8px; background: #102233; }

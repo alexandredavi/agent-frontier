@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_DEFS, CAPSULE_KW, outputPerMin } from './defs';
+import { type Design, TOOL_OF } from './designs';
 import { openMap } from './testMaps';
 import type { Agent, AgentType, ResourceId } from './types';
 import { World } from './world';
@@ -128,7 +129,7 @@ describe('cadeia completa', () => {
         { x: 2, y: 28, c: 'r' },
       ]),
     );
-    for (let i = 0; i < 6; i++) placeOk(w, 'painel_solar', 50, 2 + i * 3);
+    for (let i = 0; i < 9; i++) placeOk(w, 'painel_solar', 50, 2 + i * 3);
 
     // Água: 2 extratores de gelo → unificador → derretedor x2 via divisor
     const g1 = placeOk(w, 'extrator', 2, 2);
@@ -170,11 +171,18 @@ describe('cadeia completa', () => {
     const silo = placeOk(w, 'silo', 28, 16);
     link(w, c, silo);
 
-    for (let i = 0; i < 3000; i++) {
+    // Com as versões de fábrica a confiabilidade composta quase zera os módulos bons;
+    // aqui usamos versões com Núcleo Avançado + Cuidadoso (99%).
+    for (const m of [a1, a2, el, f, p, c]) {
+      const d: Design = { id: `t-${m.type}`, name: 't', role: m.type, core: 'avancado', tool: TOOL_OF[m.type], cards: ['cuidadoso'], version: 2, factory: false };
+      w.addDesign(d);
+      w.applyDesign(m.designId!, d.id);
+    }
+    for (let i = 0; i < 6000; i++) {
       f.inputs.minerio = 4;
       w.tick(0.1);
     }
     expect(w.power.factor).toBe(1);
-    expect(w.stockTotals().modulo ?? 0).toBeGreaterThanOrEqual(5);
+    expect(w.stockTotals().modulo ?? 0).toBeGreaterThanOrEqual(3);
   });
 });

@@ -39,6 +39,12 @@ export type AgentType =
 /** ok = funcionando · bloqueado = saída travada/cheio · ocioso = sem nada para fazer */
 export type AgentStatus = 'ok' | 'bloqueado' | 'ocioso';
 
+/** Um item físico ou de dados. `bad` = defeituoso (alucinação): parece normal, mas estraga quem o consome. */
+export interface Item {
+  res: ResourceId;
+  bad: boolean;
+}
+
 export interface Agent {
   id: number;
   type: AgentType;
@@ -47,6 +53,8 @@ export interface Agent {
   y: number;
   /** Recurso extraído (só Extrator). */
   resource: ResourceId | null;
+  /** Versão montada na Oficina (só agentes de IA). */
+  designId: string | null;
   /** Total de itens produzidos (ou destruídos, no Descarte). */
   produced: number;
   /** Progresso do ciclo atual (0..1). */
@@ -55,8 +63,16 @@ export interface Agent {
   running: boolean;
   /** Ingredientes recebidos e ainda não consumidos (máquinas com receita). */
   inputs: Partial<Record<ResourceId, number>>;
+  /** Quantos desses ingredientes são defeituosos. */
+  badInputs: Partial<Record<ResourceId, number>>;
+  /** O ciclo atual consumiu algum ingrediente defeituoso (vai ser perdido). */
+  contaminated: boolean;
+  /** Itens defeituosos produzidos (alucinações do próprio agente). */
+  defects: number;
+  /** Ciclos perdidos por ingrediente defeituoso. */
+  wasted: number;
   /** Itens guardados: buffer de saída (máquinas/Divisor/Unificador) ou estoque (Silo). */
-  buffer: ResourceId[];
+  buffer: Item[];
   status: AgentStatus;
   /** Segundos seguidos em estado bloqueado. */
   stalledFor: number;
@@ -71,6 +87,7 @@ export interface Agent {
 
 export interface ItemOnLine {
   res: ResourceId;
+  bad: boolean;
   /** Distância percorrida desde o início da linha, em células. */
   pos: number;
 }

@@ -17,6 +17,8 @@ export class GameState {
   tab = 0;
   /** Retângulos da UI em coordenadas de tela, para não construir por baixo dos painéis. */
   uiRects: Phaser.Geom.Rectangle[] = [];
+  /** Painéis HTML sobre o jogo (Oficina), em pixels de tela. */
+  overlayRect: () => DOMRect | null = () => null;
 
   constructor(public world: World) {}
 
@@ -55,6 +57,8 @@ export class GameState {
   }
 
   isOverUI(x: number, y: number): boolean {
+    const o = this.overlayRect();
+    if (o && x >= o.left && x <= o.right && y >= o.top && y <= o.bottom) return true;
     return this.uiRects.some((r) => r.contains(x, y));
   }
 }

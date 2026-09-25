@@ -349,10 +349,13 @@ export class WorldScene extends Phaser.Scene {
       g.lineStyle(2, color, 0.9);
       g.strokeRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
       const def = AGENT_DEFS[tool.type];
-      const kw = check.ok ? agentKw(tool.type, check.resource) : def.kw;
-      const parts = [def.name];
+      const activeId = world.activeDesign[tool.type];
+      const st = activeId ? world.stats(activeId) : null;
+      const kw = (check.ok ? agentKw(tool.type, check.resource) : def.kw) * (st?.kwMult ?? 1);
+      const parts = [activeId ? world.designs.get(activeId)!.name : def.name];
+      if (st && st.reliability < 100) parts.push(`${Math.round(st.reliability)}%`);
       if (def.recipe) parts.push(recipeText(tool.type, check.ok ? check.resource : null));
-      if (kw) parts.push(`${kw} kW`);
+      if (kw) parts.push(`${Math.round(kw * 10) / 10} kW`);
       if (def.generates) parts.push(`+${def.generates} kW`);
       const text = check.ok ? parts.join(' · ') : PLACE_ERROR_TEXT[check.reason];
       this.tip.setText(text).setPosition(x * TILE + size + 6, y * TILE).setScale(zoomFix).setVisible(true);
@@ -374,16 +377,22 @@ export class WorldScene extends Phaser.Scene {
   private describe(a: Agent): string {
     const def = AGENT_DEFS[a.type];
     const w = this.state.world;
-    const lines = [def.name.toUpperCase(), STATUS_TEXT[a.status]];
+    const design = w.designOf(a);
+    const lines = [(design ? design.name : def.name).toUpperCase(), STATUS_TEXT[a.status]];
     if (a.refusing) lines.push(`⚠ Recebendo item que não usa: ${RESOURCES[a.refusing].name}`);
     if (def.recipe) {
       lines.push(`Receita: ${recipeText(a.type, a.resource)}`);
-      const perMin = outputPerMin(a.type);
+      const perMin = design ? Math.round(w.stats(design.id).perMin * 10) / 10 : outputPerMin(a.type);
       lines.push(`Saída: ${perMin}/min · Produzido: ${a.produced}`);
-      if (a.running) lines.push(`Ciclo: ${Math.floor(a.progress * 100)}%`);
+      if (design) {
+        const st = w.stats(design.id);
+        lines.push(`Confiabilidade: ${Math.round(st.reliability)}% · Velocidade ×${st.speed.toFixed(2)}`);
+        lines.push(`Defeituosos produzidos: ${a.defects} · Ciclos perdidos: ${a.wasted}`);
+      }
+      if (a.running) lines.push(`Ciclo: ${Math.floor(a.progress * 100)}%${a.contaminated ? ' (ingrediente defeituoso — será perdido)' : ''}`);
       const ins = Object.entries(def.recipe.inputs);
       if (ins.length) lines.push('Ingredientes: ' + ins.map(([r, n]) => `${RESOURCES[r as keyof typeof RESOURCES].name} ${a.inputs[r as keyof typeof a.inputs] ?? 0}/${n! * INPUT_CYCLES}`).join(' · '));
-      lines.push(`Consumo: ${agentKw(a.type, a.resource)} kW (só trabalhando)`);
+      lines.push(`Consumo: ${Math.round(w.agentPower(a) * 10) / 10} kW (só trabalhando)`);
     }
     if (def.generates) lines.push(`Gera ${def.generates} kW`);
     if (a.type === 'descarte') lines.push(`Destruídos: ${a.produced}`);

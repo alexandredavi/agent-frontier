@@ -19,6 +19,7 @@ npm run build    # gera a versão estática em dist/
 
 | Ação | Comando |
 | --- | --- |
+| Oficina (montar versões de agentes) | `O` ou botão ⚙ Oficina |
 | Trocar aba da barra | `Tab` (Shift+Tab volta) ou clique na aba |
 | Escolher agente | `1`–`9` dentro da aba (ou clique no espaço) |
 | Construir | Clique no mapa com um agente escolhido |
@@ -39,6 +40,17 @@ npm run build    # gera a versão estática em dist/
 | Energia | Painel Solar (+20 kW) |
 
 Receitas e números: `src/sim/defs.ts`. Matéria anda nas linhas como círculos; dados, como losangos.
+
+## Oficina (M4)
+
+Agentes de IA (extração e processamento) são montados com **Núcleo + Ferramenta + Cartões de diretiva**. As máquinas originais são as versões **v1 de fábrica**; na Oficina você duplica, ajusta, roda a **bancada de testes** (100 amostras) e salva como nova versão, que vai para a barra. Ao salvar, escolha se os agentes da versão anterior são atualizados (Todos) ou não (Só os novos).
+
+| Módulo | Opções |
+| --- | --- |
+| Núcleo | Básico (2 slots) · Avançado (×1,5 velocidade, +10 pp, ×2 kW, 4 slots) |
+| Cartões | Acelerar (×1,5 vel., −10 pp) · Cuidadoso (×0,5 vel., +15 pp) · Econômico (−30% kW, ×0,8 vel.) · cada cartão −5% de velocidade |
+
+**Alucinações:** cada item pode sair defeituoso (confiabilidade da versão). Parece normal, mas quem o consome perde o ciclo. No HUD, "+N def." mostra os defeituosos guardados nos silos. A confiabilidade se acumula na cadeia: vale investir nos agentes do começo.
 
 ## Regras
 
@@ -67,5 +79,5 @@ Depuração no console do navegador: `agentFrontier.state.world`.
 - [x] **M1** — mapa, câmera, construir Extrator, produção e save
 - [x] **M2** — conexões ponto a ponto, itens fluindo, Silo, Divisor, Unificador
 - [x] **M3** — receitas Tier 0/1, energia, Cordilheira Ferrosa, barra com abas
-- [ ] **M4** — Oficina, cartões de diretiva e bancada de testes
-- [ ] **M5** — confiabilidade, Verificador, experiência/drift e metas da Arca
+- [x] **M4** — Oficina, cartões de diretiva, bancada de testes, versões e confiabilidade
+- [ ] **M5** — Verificador, sujeira do bioma, experiência/drift, bloqueio por tier e metas da Arca

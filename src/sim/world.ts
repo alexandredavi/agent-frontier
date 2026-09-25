@@ -1,5 +1,7 @@
 import { AGENT_DEFS, AGENT_SIZE, CAPSULE_KW, INPUT_CYCLES, LINK, agentKw } from './defs';
+import { type Design, type DesignStats, MACHINE_ROLES, designStats, factoryDesign, factoryId, isMachine } from './designs';
 import type { GameMap } from './map';
+import { Rng } from './rng';
 import type { Agent, AgentType, Connection, PowerState, ResourceId } from './types';
 
 export type PlaceError = 'fora-do-mapa' | 'sinal-fraco' | 'terreno' | 'ocupado' | 'sem-no' | 'nos-misturados';
@@ -35,17 +37,22 @@ export function agentCenter(a: { x: number; y: number }): { x: number; y: number
   return { x: a.x + AGENT_SIZE / 2, y: a.y + AGENT_SIZE / 2 };
 }
 
-export function newAgent(id: number, type: AgentType, x: number, y: number, resource: ResourceId | null): Agent {
+export function newAgent(id: number, type: AgentType, x: number, y: number, resource: ResourceId | null, designId: string | null = null): Agent {
   return {
     id,
     type,
     x,
     y,
     resource,
+    designId,
     produced: 0,
     progress: 0,
     running: false,
     inputs: {},
+    badInputs: {},
+    contaminated: false,
+    defects: 0,
+    wasted: 0,
     buffer: [],
     status: 'ocioso',
     stalledFor: 0,
@@ -62,12 +69,78 @@ export class World {
   /** Tempo de jogo decorrido, em segundos. */
   time = 0;
   power: PowerState = { supply: CAPSULE_KW, demand: 0, factor: 1 };
+  /** Versões de agentes (fábrica + criadas na Oficina). */
+  readonly designs = new Map<string, Design>();
+  /** Versão usada na barra para cada papel. */
+  readonly activeDesign: Partial<Record<AgentType, string>> = {};
+  rng = new Rng();
+  private statsCache = new Map<string, DesignStats>();
 
   private readonly occupancy: Int32Array;
   private nextId = 1;
 
   constructor(readonly map: GameMap) {
     this.occupancy = new Int32Array(map.width * map.height);
+    for (const role of MACHINE_ROLES) {
+      const d = factoryDesign(role);
+      this.designs.set(d.id, d);
+      this.activeDesign[role] = d.id;
+    }
+  }
+
+  // ---------- versões (Oficina) ----------
+
+  designOf(a: Agent): Design | undefined {
+    return a.designId ? this.designs.get(a.designId) : undefined;
+  }
+
+  stats(designId: string): DesignStats {
+    let st = this.statsCache.get(designId);
+    if (!st) {
+      st = designStats(this.designs.get(designId)!);
+      this.statsCache.set(designId, st);
+    }
+    return st;
+  }
+
+  /** Próximo número de versão para um papel. */
+  nextVersion(role: AgentType): number {
+    let v = 0;
+    for (const d of this.designs.values()) if (d.role === role) v = Math.max(v, d.version);
+    return v + 1;
+  }
+
+  addDesign(d: Design): void {
+    this.designs.set(d.id, d);
+    this.statsCache.delete(d.id);
+  }
+
+  setActive(designId: string): void {
+    const d = this.designs.get(designId);
+    if (d) this.activeDesign[d.role] = d.id;
+  }
+
+  agentsUsing(designId: string): Agent[] {
+    return [...this.agents.values()].filter((a) => a.designId === designId);
+  }
+
+  /** Troca a versão dos agentes de `fromId` para `toId` (mesmo papel). Retorna quantos mudaram. */
+  applyDesign(fromId: string, toId: string): number {
+    const to = this.designs.get(toId);
+    if (!to) return 0;
+    let n = 0;
+    for (const a of this.agentsUsing(fromId)) {
+      if (a.type !== to.role) continue;
+      a.designId = toId;
+      n++;
+    }
+    return n;
+  }
+
+  /** Consumo de um agente trabalhando (kW), já com os módulos. */
+  agentPower(a: Agent): number {
+    const base = agentKw(a.type, a.resource);
+    return a.designId ? base * this.stats(a.designId).kwMult : base;
   }
 
   // ---------- agentes ----------
@@ -92,10 +165,18 @@ export class World {
     return { ok: true, resource: [...found][0] };
   }
 
-  place(type: AgentType, x: number, y: number): { ok: true; agent: Agent } | { ok: false; reason: PlaceError } {
+  /** Constrói um agente. Para agentes de IA, `designId` escolhe a versão (padrão: a ativa na barra). */
+  place(type: AgentType, x: number, y: number, designId?: string): { ok: true; agent: Agent } | { ok: false; reason: PlaceError } {
+    let design: string | null = null;
+    if (designId && this.designs.has(designId)) {
+      type = this.designs.get(designId)!.role;
+      design = designId;
+    } else if (isMachine(type)) {
+      design = this.activeDesign[type] ?? factoryId(type);
+    }
     const check = this.canPlace(type, x, y);
     if (!check.ok) return check;
-    const agent = newAgent(this.nextId++, type, x, y, check.resource);
+    const agent = newAgent(this.nextId++, type, x, y, check.resource, design);
     this.agents.set(agent.id, agent);
     this.fill(agent, agent.id);
     return { ok: true, agent };
@@ -179,12 +260,21 @@ export class World {
 
   // ---------- estoque e energia ----------
 
-  /** Estoque total = tudo que está guardado em Silos. */
+  /** Estoque bom = itens não defeituosos guardados em Silos. */
   stockTotals(): Partial<Record<ResourceId, number>> {
+    return this.siloCount(false);
+  }
+
+  /** Itens defeituosos guardados em Silos. */
+  defectTotals(): Partial<Record<ResourceId, number>> {
+    return this.siloCount(true);
+  }
+
+  private siloCount(bad: boolean): Partial<Record<ResourceId, number>> {
     const totals: Partial<Record<ResourceId, number>> = {};
     for (const a of this.agents.values()) {
       if (a.type !== 'silo') continue;
-      for (const r of a.buffer) totals[r] = (totals[r] ?? 0) + 1;
+      for (const it of a.buffer) if (it.bad === bad) totals[it.res] = (totals[it.res] ?? 0) + 1;
     }
     return totals;
   }
@@ -218,18 +308,19 @@ export class World {
     }
   }
 
-  private receive(a: Agent, res: ResourceId): void {
+  private receive(a: Agent, res: ResourceId, bad: boolean): void {
     switch (a.type) {
       case 'silo':
       case 'divisor':
       case 'unificador':
-        a.buffer.push(res);
+        a.buffer.push({ res, bad });
         break;
       case 'descarte':
         a.produced++;
         break;
       default:
         a.inputs[res] = (a.inputs[res] ?? 0) + 1;
+        if (bad) a.badInputs[res] = (a.badInputs[res] ?? 0) + 1;
     }
   }
 
@@ -243,18 +334,44 @@ export class World {
     return true;
   }
 
+  /** Consome os ingredientes. Cada unidade tirada pode ser uma das defeituosas guardadas. */
   private start(a: Agent): void {
     const r = AGENT_DEFS[a.type].recipe!;
-    for (const [res, n] of Object.entries(r.inputs)) a.inputs[res as ResourceId]! -= n!;
+    a.contaminated = false;
+    for (const [key, n] of Object.entries(r.inputs)) {
+      const res = key as ResourceId;
+      for (let i = 0; i < n!; i++) {
+        const total = a.inputs[res] ?? 0;
+        const bad = a.badInputs[res] ?? 0;
+        if (bad > 0 && this.rng.next() < bad / total) {
+          a.badInputs[res] = bad - 1;
+          a.contaminated = true;
+        }
+        a.inputs[res] = total - 1;
+      }
+    }
     a.running = true;
   }
 
+  /** Termina o ciclo: ingrediente defeituoso = ciclo perdido; senão, cada item pode sair defeituoso. */
   private finish(a: Agent): void {
     const r = AGENT_DEFS[a.type].recipe!;
-    const res = r.output.res ?? a.resource;
-    if (res) for (let i = 0; i < r.output.n; i++) a.buffer.push(res);
-    a.produced += r.output.n;
     a.running = false;
+    if (a.contaminated) {
+      a.contaminated = false;
+      a.wasted++;
+      return;
+    }
+    const res = r.output.res ?? a.resource;
+    const rel = a.designId ? this.stats(a.designId).reliability : 100;
+    if (res) {
+      for (let i = 0; i < r.output.n; i++) {
+        const bad = rel < 100 && this.rng.chance(1 - rel / 100);
+        if (bad) a.defects++;
+        a.buffer.push({ res, bad });
+      }
+    }
+    a.produced += r.output.n;
   }
 
   // ---------- simulação ----------
@@ -275,7 +392,7 @@ export class World {
       if (!a.running && this.canStart(a)) this.start(a);
       if (a.running) {
         workers.push(a);
-        demand += agentKw(a.type, a.resource);
+        demand += this.agentPower(a);
       }
     }
     const supply = this.powerSupply();
@@ -285,7 +402,8 @@ export class World {
     // 3. Produção (ciclos), na velocidade que a energia permite
     for (const a of workers) {
       const cycle = AGENT_DEFS[a.type].recipe!.cycle;
-      a.progress += (dt * factor) / cycle;
+      const speed = a.designId ? this.stats(a.designId).speed : 1;
+      a.progress += (dt * factor * speed) / cycle;
       while (a.running && a.progress >= 1 - EPS) {
         this.finish(a);
         a.progress -= 1;
@@ -319,7 +437,7 @@ export class World {
           if (!front || front.pos < c.length - EPS) continue;
           if (this.accepts(a, front.res)) {
             c.items.shift();
-            this.receive(a, front.res);
+            this.receive(a, front.res, front.bad);
             a.rrIn = (idx + 1) % ins.length;
             delivered = true;
             break;
@@ -342,7 +460,8 @@ export class World {
           const c = outs[idx];
           const last = c.items[c.items.length - 1];
           if (c.cooldown <= EPS && (!last || last.pos >= LINK.gap - EPS)) {
-            c.items.push({ res: a.buffer.shift()!, pos: 0 });
+            const it = a.buffer.shift()!;
+            c.items.push({ res: it.res, bad: it.bad, pos: 0 });
             c.cooldown = interval;
             a.rrOut = (idx + 1) % outs.length;
             a.sinceOut = 0;

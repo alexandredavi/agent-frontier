@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { Speed } from '../sim/clock';
 import { AGENT_DEFS, CAPSULE_KW, CATEGORIES, RESOURCES, RESOURCE_ORDER } from '../sim/defs';
+import { isMachine } from '../sim/designs';
 import type { AgentType, ResourceId } from '../sim/types';
 import { drawAgentIcon, drawItem } from './icons';
 import { exportSave, importSave, writeSave } from './persistence';
@@ -11,7 +12,7 @@ const SLOT = 56;
 const SLOT_GAP = 8;
 const SLOTS = 9;
 const TAB_H = 26;
-const STOCK_W = 220;
+const STOCK_W = 250;
 const ROW_H = 22;
 
 interface Button {
@@ -25,6 +26,7 @@ export class UIScene extends Phaser.Scene {
   private stockRows!: Phaser.GameObjects.Container;
   private stockKey = '<init>';
   private stockTexts = new Map<ResourceId, Phaser.GameObjects.Text>();
+  private defectTexts = new Map<ResourceId, Phaser.GameObjects.Text>();
   private powerText!: Phaser.GameObjects.Text;
   private footerText!: Phaser.GameObjects.Text;
   private stockGroup!: Phaser.GameObjects.Container;
@@ -56,22 +58,25 @@ export class UIScene extends Phaser.Scene {
     this.help = this.add.text(
       0,
       0,
-      'Tab: trocar aba · 1–9: escolher agente\nClique: construir · Arraste agente→agente: conectar\nX: demolir agente ou conexão · Esc: cancelar\nBotão direito / WASD: mover · Roda: zoom\nEspaço: pausar',
+      'Tab: trocar aba · 1–9: escolher agente · O: Oficina\nClique: construir · Arraste agente→agente: conectar\nX: demolir agente ou conexão · Esc: cancelar\nBotão direito / WASD: mover · Roda: zoom\nEspaço: pausar',
       { fontFamily: FONT, fontSize: '12px', color: UI.muted, lineSpacing: 4 },
     );
 
     this.toastText = this.add
-      .text(0, 0, '', { fontFamily: FONT, fontSize: '14px', color: '#ffffff', backgroundColor: '#3a1d22ee', padding: { x: 12, y: 7 } })
+      .text(0, 0, '', { fontFamily: FONT, fontSize: '14px', color: '#ffffff', backgroundColor: '#1f2531f0', padding: { x: 12, y: 7 } })
       .setOrigin(0.5, 0)
       .setAlpha(0);
 
     this.state.events.on('tool', this.refreshHotbar, this);
     this.state.events.on('tab', this.renderSlots, this);
+    this.state.events.on('designs-changed', this.renderSlots, this);
+    this.state.events.on('world-replaced', this.renderSlots, this);
     this.state.events.on('speed', this.refreshSpeed, this);
     this.state.events.on('toast', this.showToast, this);
     this.state.events.on('saved', this.flashSaved, this);
 
     const kb = this.input.keyboard!;
+    kb.on('keydown-O', () => this.state.events.emit('workshop-toggle'));
     kb.addCapture('TAB');
     kb.on('keydown-TAB', (e: KeyboardEvent) => {
       const n = CATEGORIES.length;
@@ -94,13 +99,18 @@ export class UIScene extends Phaser.Scene {
   update(): void {
     const w = this.state.world;
     const stock = w.stockTotals();
-    const visible = RESOURCE_ORDER.filter((r) => (stock[r] ?? 0) > 0);
+    const defects = w.defectTotals();
+    const visible = RESOURCE_ORDER.filter((r) => (stock[r] ?? 0) + (defects[r] ?? 0) > 0);
     const key = visible.join(',');
     if (key !== this.stockKey) {
       this.stockKey = key;
       this.rebuildStockRows(visible);
     }
     for (const [r, t] of this.stockTexts) t.setText(String(stock[r] ?? 0));
+    for (const [r, t] of this.defectTexts) {
+      const n = defects[r] ?? 0;
+      t.setText(n ? `+${n} def.` : '');
+    }
 
     const p = w.power;
     const short = p.factor < 1;
@@ -125,6 +135,7 @@ export class UIScene extends Phaser.Scene {
   private rebuildStockRows(visible: ResourceId[]): void {
     this.stockRows.removeAll(true);
     this.stockTexts.clear();
+    this.defectTexts.clear();
     if (visible.length === 0) {
       this.stockRows.add(this.add.text(14, 2, 'Vazio — ligue algo a um Silo', { fontFamily: FONT, fontSize: '12px', color: UI.muted }));
     }
@@ -133,9 +144,11 @@ export class UIScene extends Phaser.Scene {
       const g = this.add.graphics();
       drawItem(g, r, 20, y, 5, RESOURCE_COLOR[r]);
       const name = this.add.text(34, y, RESOURCES[r].name, { fontFamily: FONT, fontSize: '13px', color: UI.text }).setOrigin(0, 0.5);
-      const val = this.add.text(STOCK_W - 14, y, '0', { fontFamily: FONT, fontSize: '13px', color: UI.text, fontStyle: 'bold' }).setOrigin(1, 0.5);
+      const def = this.add.text(STOCK_W - 14, y, '', { fontFamily: FONT, fontSize: '11px', color: UI.badText }).setOrigin(1, 0.5);
+      const val = this.add.text(STOCK_W - 70, y, '0', { fontFamily: FONT, fontSize: '13px', color: UI.text, fontStyle: 'bold' }).setOrigin(1, 0.5);
       this.stockTexts.set(r, val);
-      this.stockRows.add([g, name, val]);
+      this.defectTexts.set(r, def);
+      this.stockRows.add([g, name, val, def]);
     });
     const rowsH = Math.max(1, visible.length) * ROW_H;
     const powerY = 30 + rowsH + 8;
@@ -160,6 +173,10 @@ export class UIScene extends Phaser.Scene {
       items.push(btn.bg, btn.text);
       tx += w + 4;
     });
+    const ws = this.button(width - 130, 0, 130, TAB_H - 2, '⚙ Oficina (O)', () => this.state.events.emit('workshop-toggle'), 12);
+    ws.bg.setStrokeStyle(1, UI.accent);
+    ws.text.setColor(UI.accentText);
+    items.push(ws.bg, ws.text);
     this.slotLayer = this.add.container(0, TAB_H);
     items.push(this.slotLayer);
     this.hotbar = this.add.container(0, 0, items);
@@ -179,8 +196,10 @@ export class UIScene extends Phaser.Scene {
       if (type) {
         const g = this.add.graphics();
         drawAgentIcon(g, type, x + SLOT / 2, 12 + SLOT / 2 - 5, 11, AGENT_COLOR[type]);
+        const w = this.state.world;
+        const title = isMachine(type) ? (w.designs.get(w.activeDesign[type] ?? '')?.name ?? AGENT_DEFS[type].name) : AGENT_DEFS[type].name;
         const label = this.add
-          .text(x + SLOT / 2, 12 + SLOT - 5, AGENT_DEFS[type].name, { fontFamily: FONT, fontSize: '9px', color: UI.text })
+          .text(x + SLOT / 2, 12 + SLOT - 5, title, { fontFamily: FONT, fontSize: '9px', color: UI.text })
           .setOrigin(0.5, 1);
         if (label.width > SLOT - 4) label.setScale((SLOT - 4) / label.width);
         this.slotLayer.add([g, label]);

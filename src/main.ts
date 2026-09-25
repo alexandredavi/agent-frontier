@@ -6,10 +6,13 @@ import { loadSave } from './game/persistence';
 import { GameMap } from './sim/map';
 import { MAP_ROWS } from './sim/mapData';
 import { World } from './sim/world';
+import { Workshop } from './ui/workshop';
 
 const map = GameMap.fromAscii(MAP_ROWS);
 const world = loadSave(map) ?? new World(map);
 const state = new GameState(world);
+const workshop = new Workshop(state);
+state.overlayRect = () => workshop.rect();
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
