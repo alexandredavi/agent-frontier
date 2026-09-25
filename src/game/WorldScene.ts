@@ -387,9 +387,9 @@ export class WorldScene extends Phaser.Scene {
       if (design) {
         const st = w.stats(design.id);
         lines.push(`Confiabilidade: ${Math.round(st.reliability)}% · Velocidade ×${st.speed.toFixed(2)}`);
-        lines.push(`Defeituosos produzidos: ${a.defects} · Ciclos perdidos: ${a.wasted}`);
+        lines.push(`Alucinações: ${a.defects} · Defeitos herdados: ${a.inherited}`);
       }
-      if (a.running) lines.push(`Ciclo: ${Math.floor(a.progress * 100)}%${a.contaminated ? ' (ingrediente defeituoso — será perdido)' : ''}`);
+      if (a.running) lines.push(`Ciclo: ${Math.floor(a.progress * 100)}%${a.quality < 1 ? ` · qualidade herdada ${Math.round(a.quality * 100)}%` : ''}`);
       const ins = Object.entries(def.recipe.inputs);
       if (ins.length) lines.push('Ingredientes: ' + ins.map(([r, n]) => `${RESOURCES[r as keyof typeof RESOURCES].name} ${a.inputs[r as keyof typeof a.inputs] ?? 0}/${n! * INPUT_CYCLES}`).join(' · '));
       lines.push(`Consumo: ${Math.round(w.agentPower(a) * 10) / 10} kW (só trabalhando)`);

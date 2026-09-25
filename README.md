@@ -50,7 +50,7 @@ Agentes de IA (extração e processamento) são montados com **Núcleo + Ferrame
 | Núcleo | Básico (2 slots) · Avançado (×1,5 velocidade, +10 pp, ×2 kW, 4 slots) |
 | Cartões | Acelerar (×1,5 vel., −10 pp) · Cuidadoso (×0,5 vel., +15 pp) · Econômico (−30% kW, ×0,8 vel.) · cada cartão −5% de velocidade |
 
-**Alucinações:** cada item pode sair defeituoso (confiabilidade da versão). Parece normal, mas quem o consome perde o ciclo. No HUD, "+N def." mostra os defeituosos guardados nos silos. A confiabilidade se acumula na cadeia: vale investir nos agentes do começo.
+**Alucinações:** cada item pode sair defeituoso. Parece normal, mas contamina quem o consome: a chance de cada item sair bom é *confiabilidade × (fração de ingredientes bons)²*. No HUD, "+N def." mostra os defeituosos guardados nos silos. A confiabilidade se acumula na cadeia (Módulo de habitat: ~63% bons com versões de fábrica, ~91% com Núcleo Avançado, ~96% com Avançado + Cuidadoso).
 
 ## Regras
 

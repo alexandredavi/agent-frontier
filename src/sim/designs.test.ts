@@ -72,17 +72,42 @@ describe('alucinações', () => {
     expect(rate).toBeLessThan(0.84);
   });
 
-  it('ingrediente defeituoso faz perder o ciclo', () => {
+  it('ingredientes todos defeituosos: tudo sai defeituoso, contado como herdado', () => {
     const w = new World(openMap(30, 10));
     const e = w.place('eletrolisador', 4, 4);
     if (!e.ok) throw new Error();
     const m = e.agent;
     m.inputs = { agua: 6, modelo: 2 };
-    m.badInputs = { modelo: 2 }; // todos os modelos defeituosos
+    m.badInputs = { agua: 6, modelo: 2 };
     for (let i = 0; i < 130; i++) w.tick(0.1);
-    expect(m.wasted).toBe(2);
-    expect(m.buffer.length).toBe(0);
-    expect(m.produced).toBe(0);
+    expect(m.produced).toBe(6); // o ciclo não é mais perdido
+    expect(m.buffer.every((it) => it.bad)).toBe(true);
+    expect(m.inherited + m.defects).toBe(6);
+    expect(m.inherited).toBeGreaterThan(0);
+  });
+
+  it('defeitos suavizados: 1 ingrediente ruim em 4 → ~(3/4)² × confiabilidade', () => {
+    const w = new World(openMap(30, 10));
+    for (let i = 0; i < 4; i++) w.place('painel_solar', 20, 1 + i * 2);
+    const e = w.place('eletrolisador', 4, 4);
+    if (!e.ok) throw new Error();
+    const m = e.agent;
+    let good = 0;
+    let total = 0;
+    for (let i = 0; i < 20000; i++) {
+      m.inputs = { agua: 6, modelo: 2 };
+      m.badInputs = { modelo: 2 }; // o modelo de cada ciclo é defeituoso
+      w.tick(0.1);
+      for (const it of m.buffer) {
+        total++;
+        if (!it.bad) good++;
+      }
+      m.buffer = [];
+    }
+    const expected = 0.9 * (3 / 4) ** 2; // ≈ 0,506
+    expect(total).toBeGreaterThan(900);
+    expect(good / total).toBeGreaterThan(expected - 0.05);
+    expect(good / total).toBeLessThan(expected + 0.05);
   });
 
   it('Silo separa itens bons e defeituosos', () => {

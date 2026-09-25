@@ -1,4 +1,4 @@
-import { AGENT_DEFS, AGENT_SIZE, CAPSULE_KW, INPUT_CYCLES, LINK, agentKw } from './defs';
+import { AGENT_DEFS, AGENT_SIZE, CAPSULE_KW, INHERIT_EXPONENT, INPUT_CYCLES, LINK, agentKw } from './defs';
 import { type Design, type DesignStats, MACHINE_ROLES, designStats, factoryDesign, factoryId, isMachine } from './designs';
 import type { GameMap } from './map';
 import { Rng } from './rng';
@@ -50,9 +50,9 @@ export function newAgent(id: number, type: AgentType, x: number, y: number, reso
     running: false,
     inputs: {},
     badInputs: {},
-    contaminated: false,
+    quality: 1,
     defects: 0,
-    wasted: 0,
+    inherited: 0,
     buffer: [],
     status: 'ocioso',
     stalledFor: 0,
@@ -337,7 +337,8 @@ export class World {
   /** Consome os ingredientes. Cada unidade tirada pode ser uma das defeituosas guardadas. */
   private start(a: Agent): void {
     const r = AGENT_DEFS[a.type].recipe!;
-    a.contaminated = false;
+    let units = 0;
+    let badUnits = 0;
     for (const [key, n] of Object.entries(r.inputs)) {
       const res = key as ResourceId;
       for (let i = 0; i < n!; i++) {
@@ -345,33 +346,36 @@ export class World {
         const bad = a.badInputs[res] ?? 0;
         if (bad > 0 && this.rng.next() < bad / total) {
           a.badInputs[res] = bad - 1;
-          a.contaminated = true;
+          badUnits++;
         }
         a.inputs[res] = total - 1;
+        units++;
       }
     }
+    a.quality = units === 0 ? 1 : Math.pow((units - badUnits) / units, INHERIT_EXPONENT);
     a.running = true;
   }
 
-  /** Termina o ciclo: ingrediente defeituoso = ciclo perdido; senão, cada item pode sair defeituoso. */
+  /**
+   * Termina o ciclo. Cada item sai bom com chance = confiabilidade × qualidade herdada
+   * (defeitos suavizados: um ingrediente ruim reduz a chance, não perde o ciclo inteiro).
+   */
   private finish(a: Agent): void {
     const r = AGENT_DEFS[a.type].recipe!;
     a.running = false;
-    if (a.contaminated) {
-      a.contaminated = false;
-      a.wasted++;
-      return;
-    }
     const res = r.output.res ?? a.resource;
     const rel = a.designId ? this.stats(a.designId).reliability : 100;
     if (res) {
       for (let i = 0; i < r.output.n; i++) {
-        const bad = rel < 100 && this.rng.chance(1 - rel / 100);
-        if (bad) a.defects++;
-        a.buffer.push({ res, bad });
+        const own = rel >= 100 || !this.rng.chance(1 - rel / 100);
+        const clean = a.quality >= 1 || this.rng.chance(a.quality);
+        if (!own) a.defects++;
+        else if (!clean) a.inherited++;
+        a.buffer.push({ res, bad: !(own && clean) });
       }
     }
     a.produced += r.output.n;
+    a.quality = 1;
   }
 
   // ---------- simulação ----------

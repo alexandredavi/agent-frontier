@@ -21,9 +21,9 @@ export interface SaveData {
     produced: number;
     progress: number;
     running: boolean;
-    contaminated: boolean;
+    quality: number;
     defects: number;
-    wasted: number;
+    inherited: number;
     inputs: Partial<Record<ResourceId, number>>;
     badInputs: Partial<Record<ResourceId, number>>;
     buffer: Item[];
@@ -47,9 +47,9 @@ export function serialize(world: World): SaveData {
       produced: a.produced,
       progress: a.progress,
       running: a.running,
-      contaminated: a.contaminated,
+      quality: a.quality,
       defects: a.defects,
-      wasted: a.wasted,
+      inherited: a.inherited,
       inputs: { ...a.inputs },
       badInputs: { ...a.badInputs },
       buffer: a.buffer.map((i) => ({ ...i })),
@@ -121,11 +121,12 @@ export function deserialize(data: unknown, map: GameMap): World {
     const def = AGENT_DEFS[a.type];
     a.produced = num(raw.produced);
     a.defects = num(raw.defects);
-    a.wasted = num(raw.wasted);
+    a.inherited = num(raw.inherited ?? raw.wasted);
     // v1/v2 guardavam a fração do próximo item em `acc`
     a.progress = Math.min(1, Math.max(0, num(raw.progress ?? raw.acc)));
     a.running = raw.running === true && !!def.recipe;
-    a.contaminated = a.running && raw.contaminated === true;
+    // Saves antigos do M4 marcavam o ciclo como "contaminado" (perdido); vira qualidade 0,5
+    a.quality = a.running ? Math.min(1, Math.max(0, num(raw.quality, raw.contaminated === true ? 0.5 : 1))) : 1;
     if (!a.running && Object.keys(def.recipe?.inputs ?? {}).length > 0) a.progress = 0;
     if (Array.isArray(raw.buffer)) a.buffer = raw.buffer.map(toItem).filter((i): i is Item => !!i).slice(0, def.capacity);
     if (def.recipe) {

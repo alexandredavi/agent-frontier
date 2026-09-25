@@ -65,12 +65,12 @@ export interface Agent {
   inputs: Partial<Record<ResourceId, number>>;
   /** Quantos desses ingredientes são defeituosos. */
   badInputs: Partial<Record<ResourceId, number>>;
-  /** O ciclo atual consumiu algum ingrediente defeituoso (vai ser perdido). */
-  contaminated: boolean;
-  /** Itens defeituosos produzidos (alucinações do próprio agente). */
+  /** Qualidade herdada do ciclo atual: (fração de ingredientes bons)². 1 = todos bons. */
+  quality: number;
+  /** Itens defeituosos por alucinação do próprio agente. */
   defects: number;
-  /** Ciclos perdidos por ingrediente defeituoso. */
-  wasted: number;
+  /** Itens defeituosos por culpa de ingredientes defeituosos (defeitos herdados). */
+  inherited: number;
   /** Itens guardados: buffer de saída (máquinas/Divisor/Unificador) ou estoque (Silo). */
   buffer: Item[];
   status: AgentStatus;

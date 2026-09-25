@@ -76,6 +76,12 @@ export function agentKw(type: AgentType, resource: ResourceId | null): number {
 /** Energia fixa da cápsula de pouso. */
 export const CAPSULE_KW = 10;
 
+/**
+ * Peso dos defeitos herdados: chance de cada item sair bom =
+ * confiabilidade × (fração de ingredientes bons)^INHERIT_EXPONENT.
+ */
+export const INHERIT_EXPONENT = 2;
+
 /** Ingredientes: cada buffer guarda até 2 ciclos. */
 export const INPUT_CYCLES = 2;
 
