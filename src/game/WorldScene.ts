@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
-import { AGENT_DEFS, AGENT_SIZE, LINK, RESOURCES, STALL_ALERT } from '../sim/defs';
+import { AGENT_DEFS, AGENT_SIZE, INPUT_CYCLES, LINK, RESOURCES, STALL_ALERT, agentKw, outputPerMin, recipeText } from '../sim/defs';
 import { LANDING_POINT } from '../sim/mapData';
 import type { Agent } from '../sim/types';
 import { CONNECT_ERROR_TEXT, PLACE_ERROR_TEXT, agentCenter } from '../sim/world';
-import { drawAgentIcon } from './icons';
+import { drawAgentIcon, drawItem } from './icons';
 import { writeSave } from './persistence';
 import type { GameState } from './state';
 import { AGENT_COLOR, FONT, LINK_COLOR, RESOURCE_COLOR, TERRAIN_COLOR, TILE, UI, WARN } from './theme';
@@ -23,7 +23,7 @@ const AUTOSAVE_MS = 10_000;
 const STATUS_TEXT: Record<Agent['status'], string> = {
   ok: 'Funcionando',
   bloqueado: 'Bloqueado — saída travada ou cheio',
-  ocioso: 'Ocioso — sem itens chegando',
+  ocioso: 'Ocioso — faltam itens para trabalhar',
 };
 
 export class WorldScene extends Phaser.Scene {
@@ -120,6 +120,16 @@ export class WorldScene extends Phaser.Scene {
         g.fillCircle(x * TILE + 21, y * TILE + 20, 6);
       }
     }
+    // Cordilheira: riscos de relevo
+    g.lineStyle(1, 0x6b4a44, 0.5);
+    for (let y = 0; y < map.height; y++) {
+      for (let x = 0; x < map.width; x++) {
+        if (map.terrainAt(x, y) !== 'serra' || map.nodeAt(x, y)) continue;
+        const k = (x * 11 + y * 7) % 4;
+        g.lineBetween(x * TILE + 6 + k, y * TILE + 22, x * TILE + 12 + k, y * TILE + 14);
+        g.lineBetween(x * TILE + 12 + k, y * TILE + 14, x * TILE + 18 + k, y * TILE + 22);
+      }
+    }
     g.lineStyle(1, 0x2a3040, 0.6);
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
@@ -189,9 +199,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private refreshView(agent: Agent, view: AgentView): void {
+    const def = AGENT_DEFS[agent.type];
     let text = '';
-    if (agent.type === 'extrator') text = String(agent.produced);
-    if (agent.type === 'silo') text = `${agent.buffer.length}/${AGENT_DEFS.silo.capacity}`;
+    if (def.recipe || agent.type === 'descarte') text = String(agent.produced);
+    if (agent.type === 'silo') text = `${agent.buffer.length}/${def.capacity}`;
+    if (def.generates) text = `+${def.generates} kW`;
     if (text !== view.labelKey) {
       view.labelKey = text;
       view.label.setText(text);
@@ -262,12 +274,7 @@ export class WorldScene extends Phaser.Scene {
       // Itens
       for (const item of c.items) {
         const t = c.length > 0 ? item.pos / c.length : 1;
-        const x = sx + (ex - sx) * t;
-        const y = sy + (ey - sy) * t;
-        g.fillStyle(0x0b0d12, 1);
-        g.fillCircle(x, y, 6);
-        g.fillStyle(RESOURCE_COLOR[item.res], 1);
-        g.fillCircle(x, y, 4.5);
+        drawItem(g, item.res, sx + (ex - sx) * t, sy + (ey - sy) * t, 4.5, RESOURCE_COLOR[item.res]);
       }
     }
   }
@@ -342,7 +349,12 @@ export class WorldScene extends Phaser.Scene {
       g.lineStyle(2, color, 0.9);
       g.strokeRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
       const def = AGENT_DEFS[tool.type];
-      const text = check.ok ? (def.ratePerMin ? `${def.name} · ${def.ratePerMin}/min` : def.name) : PLACE_ERROR_TEXT[check.reason];
+      const kw = check.ok ? agentKw(tool.type, check.resource) : def.kw;
+      const parts = [def.name];
+      if (def.recipe) parts.push(recipeText(tool.type, check.ok ? check.resource : null));
+      if (kw) parts.push(`${kw} kW`);
+      if (def.generates) parts.push(`+${def.generates} kW`);
+      const text = check.ok ? parts.join(' · ') : PLACE_ERROR_TEXT[check.reason];
       this.tip.setText(text).setPosition(x * TILE + size + 6, y * TILE).setScale(zoomFix).setVisible(true);
       return;
     }
@@ -363,11 +375,22 @@ export class WorldScene extends Phaser.Scene {
     const def = AGENT_DEFS[a.type];
     const w = this.state.world;
     const lines = [def.name.toUpperCase(), STATUS_TEXT[a.status]];
-    if (a.type === 'extrator' && a.resource) lines.push(`Recurso: ${RESOURCES[a.resource].name} · ${def.ratePerMin}/min`, `Produzido: ${a.produced}`);
-    lines.push(`${a.type === 'silo' ? 'Estoque' : 'Buffer'}: ${a.buffer.length}/${def.capacity}`);
+    if (a.refusing) lines.push(`⚠ Recebendo item que não usa: ${RESOURCES[a.refusing].name}`);
+    if (def.recipe) {
+      lines.push(`Receita: ${recipeText(a.type, a.resource)}`);
+      const perMin = outputPerMin(a.type);
+      lines.push(`Saída: ${perMin}/min · Produzido: ${a.produced}`);
+      if (a.running) lines.push(`Ciclo: ${Math.floor(a.progress * 100)}%`);
+      const ins = Object.entries(def.recipe.inputs);
+      if (ins.length) lines.push('Ingredientes: ' + ins.map(([r, n]) => `${RESOURCES[r as keyof typeof RESOURCES].name} ${a.inputs[r as keyof typeof a.inputs] ?? 0}/${n! * INPUT_CYCLES}`).join(' · '));
+      lines.push(`Consumo: ${agentKw(a.type, a.resource)} kW (só trabalhando)`);
+    }
+    if (def.generates) lines.push(`Gera ${def.generates} kW`);
+    if (a.type === 'descarte') lines.push(`Destruídos: ${a.produced}`);
+    if (def.capacity > 0) lines.push(`${a.type === 'silo' ? 'Estoque' : 'Saída'}: ${a.buffer.length}/${def.capacity}`);
     if (def.maxIn > 0) lines.push(`Entradas: ${w.inputsOf(a.id).length}/${def.maxIn}`);
     if (def.maxOut > 0) lines.push(`Saídas: ${w.outputsOf(a.id).length}/${def.maxOut}`);
-    lines.push('Arraste para conectar · X: demolir');
+    lines.push(def.maxIn + def.maxOut > 0 ? 'Arraste para conectar · X: demolir' : 'X: demolir');
     return lines.join('\n');
   }
 
@@ -424,10 +447,6 @@ export class WorldScene extends Phaser.Scene {
     });
 
     const kb = this.input.keyboard!;
-    kb.on('keydown-ONE', () => this.state.toggleBuild('extrator'));
-    kb.on('keydown-TWO', () => this.state.toggleBuild('silo'));
-    kb.on('keydown-THREE', () => this.state.toggleBuild('divisor'));
-    kb.on('keydown-FOUR', () => this.state.toggleBuild('unificador'));
     const cancel = () => {
       this.dragFrom = null;
       this.state.setTool({ kind: 'none' });

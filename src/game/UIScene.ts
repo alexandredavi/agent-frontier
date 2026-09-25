@@ -1,17 +1,18 @@
 import Phaser from 'phaser';
 import type { Speed } from '../sim/clock';
-import { AGENT_DEFS, RESOURCES } from '../sim/defs';
+import { AGENT_DEFS, CAPSULE_KW, CATEGORIES, RESOURCES, RESOURCE_ORDER } from '../sim/defs';
 import type { AgentType, ResourceId } from '../sim/types';
-import { drawAgentIcon } from './icons';
+import { drawAgentIcon, drawItem } from './icons';
 import { exportSave, importSave, writeSave } from './persistence';
 import type { GameState } from './state';
-import { AGENT_COLOR, FONT, RESOURCE_COLOR, UI } from './theme';
+import { AGENT_COLOR, CATEGORY_COLOR, FONT, RESOURCE_COLOR, UI, hex } from './theme';
 
 const SLOT = 56;
 const SLOT_GAP = 8;
 const SLOTS = 9;
-/** Agentes disponíveis na barra (índice = tecla - 1). */
-const HOTBAR: (AgentType | null)[] = ['extrator', 'silo', 'divisor', 'unificador', null, null, null, null, null];
+const TAB_H = 26;
+const STOCK_W = 220;
+const ROW_H = 22;
 
 interface Button {
   bg: Phaser.GameObjects.Rectangle;
@@ -19,14 +20,22 @@ interface Button {
 }
 
 export class UIScene extends Phaser.Scene {
+  // Estoque e energia
   private stockPanel!: Phaser.GameObjects.Rectangle;
-  private stockTexts = {} as Record<ResourceId, Phaser.GameObjects.Text>;
-  private agentsText!: Phaser.GameObjects.Text;
-  private timeText!: Phaser.GameObjects.Text;
+  private stockRows!: Phaser.GameObjects.Container;
+  private stockKey = '<init>';
+  private stockTexts = new Map<ResourceId, Phaser.GameObjects.Text>();
+  private powerText!: Phaser.GameObjects.Text;
+  private footerText!: Phaser.GameObjects.Text;
+  private stockGroup!: Phaser.GameObjects.Container;
 
+  // Barra
   private hotbar!: Phaser.GameObjects.Container;
+  private slotLayer!: Phaser.GameObjects.Container;
   private slotFrames: Phaser.GameObjects.Rectangle[] = [];
+  private tabButtons: Button[] = [];
 
+  // Velocidade
   private speedGroup!: Phaser.GameObjects.Container;
   private speedButtons = new Map<Speed, Button>();
   private savedText!: Phaser.GameObjects.Text;
@@ -44,9 +53,12 @@ export class UIScene extends Phaser.Scene {
     this.buildHotbar();
     this.buildTopRight();
 
-    this.help = this.add.text(0, 0,
-      '1–4: escolher agente · Clique: construir\nArraste de um agente a outro: conectar\nX: demolir agente ou conexão\nBotão direito / WASD: mover · Roda: zoom\nEsc: cancelar · Espaço: pausar',
-      { fontFamily: FONT, fontSize: '12px', color: UI.muted, lineSpacing: 4 });
+    this.help = this.add.text(
+      0,
+      0,
+      'Tab: trocar aba · 1–9: escolher agente\nClique: construir · Arraste agente→agente: conectar\nX: demolir agente ou conexão · Esc: cancelar\nBotão direito / WASD: mover · Roda: zoom\nEspaço: pausar',
+      { fontFamily: FONT, fontSize: '12px', color: UI.muted, lineSpacing: 4 },
+    );
 
     this.toastText = this.add
       .text(0, 0, '', { fontFamily: FONT, fontSize: '14px', color: '#ffffff', backgroundColor: '#3a1d22ee', padding: { x: 12, y: 7 } })
@@ -54,70 +66,148 @@ export class UIScene extends Phaser.Scene {
       .setAlpha(0);
 
     this.state.events.on('tool', this.refreshHotbar, this);
+    this.state.events.on('tab', this.renderSlots, this);
     this.state.events.on('speed', this.refreshSpeed, this);
     this.state.events.on('toast', this.showToast, this);
     this.state.events.on('saved', this.flashSaved, this);
 
+    const kb = this.input.keyboard!;
+    kb.addCapture('TAB');
+    kb.on('keydown-TAB', (e: KeyboardEvent) => {
+      const n = CATEGORIES.length;
+      this.state.setTab((this.state.tab + (e.shiftKey ? n - 1 : 1)) % n);
+    });
+    const numKeys = ['ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'];
+    numKeys.forEach((k, i) =>
+      kb.on(`keydown-${k}`, () => {
+        const type = CATEGORIES[this.state.tab].types[i];
+        if (type) this.state.toggleBuild(type);
+      }),
+    );
+
     this.scale.on('resize', this.layout, this);
-    this.layout();
-    this.refreshHotbar();
+    this.renderSlots();
     this.refreshSpeed();
+    this.layout();
   }
 
   update(): void {
     const w = this.state.world;
     const stock = w.stockTotals();
-    for (const id of Object.keys(RESOURCES) as ResourceId[]) this.stockTexts[id].setText(String(stock[id]));
-    this.agentsText.setText(`Agentes: ${w.agents.size}`);
+    const visible = RESOURCE_ORDER.filter((r) => (stock[r] ?? 0) > 0);
+    const key = visible.join(',');
+    if (key !== this.stockKey) {
+      this.stockKey = key;
+      this.rebuildStockRows(visible);
+    }
+    for (const [r, t] of this.stockTexts) t.setText(String(stock[r] ?? 0));
+
+    const p = w.power;
+    const short = p.factor < 1;
+    this.powerText
+      .setText(`Energia ${Math.round(p.demand)} / ${p.supply} kW${short ? ` · ${Math.round(p.factor * 100)}%` : ''}`)
+      .setColor(short ? UI.badText : UI.text);
     const t = Math.floor(w.time);
-    this.timeText.setText(`Tempo de jogo ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
+    this.footerText.setText(`Agentes: ${w.agents.size} · Cápsula: ${CAPSULE_KW} kW\nTempo de jogo ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
   }
 
-  // ---------- construção dos painéis ----------
+  // ---------- estoque ----------
 
   private buildStock(): void {
-    const ids = Object.keys(RESOURCES) as ResourceId[];
-    const h = 40 + ids.length * 24 + 44;
-    this.stockPanel = this.panel(0, 0, 200, h);
+    this.stockPanel = this.panel(0, 0, STOCK_W, 100);
     const title = this.add.text(14, 10, 'ESTOQUE (SILOS)', { fontFamily: FONT, fontSize: '11px', color: UI.muted, fontStyle: 'bold' });
-    const items: Phaser.GameObjects.GameObject[] = [this.stockPanel, title];
-    ids.forEach((id, i) => {
-      const y = 38 + i * 24;
-      items.push(this.add.circle(20, y, 6, RESOURCE_COLOR[id]));
-      items.push(this.add.text(34, y, RESOURCES[id].name, { fontFamily: FONT, fontSize: '14px', color: UI.text }).setOrigin(0, 0.5));
-      const val = this.add.text(186, y, '0', { fontFamily: FONT, fontSize: '14px', color: UI.text, fontStyle: 'bold' }).setOrigin(1, 0.5);
-      this.stockTexts[id] = val;
-      items.push(val);
-    });
-    const y2 = 38 + ids.length * 24 + 4;
-    this.agentsText = this.add.text(14, y2, '', { fontFamily: FONT, fontSize: '12px', color: UI.muted });
-    this.timeText = this.add.text(14, y2 + 18, '', { fontFamily: FONT, fontSize: '12px', color: UI.muted });
-    items.push(this.agentsText, this.timeText);
-    this.add.container(16, 16, items);
+    this.stockRows = this.add.container(0, 30);
+    this.powerText = this.add.text(14, 0, '', { fontFamily: FONT, fontSize: '13px', color: UI.text, fontStyle: 'bold' });
+    this.footerText = this.add.text(14, 0, '', { fontFamily: FONT, fontSize: '12px', color: UI.muted, lineSpacing: 3 });
+    this.stockGroup = this.add.container(16, 16, [this.stockPanel, title, this.stockRows, this.powerText, this.footerText]);
   }
+
+  private rebuildStockRows(visible: ResourceId[]): void {
+    this.stockRows.removeAll(true);
+    this.stockTexts.clear();
+    if (visible.length === 0) {
+      this.stockRows.add(this.add.text(14, 2, 'Vazio — ligue algo a um Silo', { fontFamily: FONT, fontSize: '12px', color: UI.muted }));
+    }
+    visible.forEach((r, i) => {
+      const y = 10 + i * ROW_H;
+      const g = this.add.graphics();
+      drawItem(g, r, 20, y, 5, RESOURCE_COLOR[r]);
+      const name = this.add.text(34, y, RESOURCES[r].name, { fontFamily: FONT, fontSize: '13px', color: UI.text }).setOrigin(0, 0.5);
+      const val = this.add.text(STOCK_W - 14, y, '0', { fontFamily: FONT, fontSize: '13px', color: UI.text, fontStyle: 'bold' }).setOrigin(1, 0.5);
+      this.stockTexts.set(r, val);
+      this.stockRows.add([g, name, val]);
+    });
+    const rowsH = Math.max(1, visible.length) * ROW_H;
+    const powerY = 30 + rowsH + 8;
+    this.powerText.setY(powerY);
+    this.footerText.setY(powerY + 22);
+    this.stockPanel.setSize(STOCK_W, powerY + 22 + 38);
+    this.stockPanel.setDisplaySize(STOCK_W, powerY + 22 + 38);
+    this.layout();
+  }
+
+  // ---------- barra com abas ----------
 
   private buildHotbar(): void {
     const width = SLOTS * SLOT + (SLOTS - 1) * SLOT_GAP + 24;
-    const bg = this.panel(0, 0, width, SLOT + 24);
+    const bg = this.panel(0, TAB_H, width, SLOT + 24);
     const items: Phaser.GameObjects.GameObject[] = [bg];
-    HOTBAR.forEach((type, i) => {
+    let tx = 0;
+    CATEGORIES.forEach((cat, i) => {
+      const w = cat.name.length * 7.5 + 26;
+      const btn = this.button(tx, 0, w, TAB_H - 2, cat.name, () => this.state.setTab(i), 12);
+      this.tabButtons.push(btn);
+      items.push(btn.bg, btn.text);
+      tx += w + 4;
+    });
+    this.slotLayer = this.add.container(0, TAB_H);
+    items.push(this.slotLayer);
+    this.hotbar = this.add.container(0, 0, items);
+  }
+
+  private renderSlots(): void {
+    this.slotLayer.removeAll(true);
+    this.slotFrames = [];
+    const cat = CATEGORIES[this.state.tab];
+    for (let i = 0; i < SLOTS; i++) {
+      const type: AgentType | undefined = cat.types[i];
       const x = 12 + i * (SLOT + SLOT_GAP);
       const frame = this.add.rectangle(x, 12, SLOT, SLOT, 0x1b1f28).setOrigin(0).setStrokeStyle(2, UI.stroke);
       this.slotFrames.push(frame);
-      items.push(frame);
-      items.push(this.add.text(x + 5, 14, String(i + 1), { fontFamily: FONT, fontSize: '10px', color: UI.muted }));
+      this.slotLayer.add(frame);
+      this.slotLayer.add(this.add.text(x + 5, 14, String(i + 1), { fontFamily: FONT, fontSize: '10px', color: UI.muted }));
       if (type) {
         const g = this.add.graphics();
-        drawAgentIcon(g, type, x + SLOT / 2, 12 + SLOT / 2 - 4, 12, AGENT_COLOR[type]);
-        items.push(g);
-        items.push(this.add.text(x + SLOT / 2, 12 + SLOT - 6, AGENT_DEFS[type].name, { fontFamily: FONT, fontSize: '9px', color: UI.text }).setOrigin(0.5, 1));
+        drawAgentIcon(g, type, x + SLOT / 2, 12 + SLOT / 2 - 5, 11, AGENT_COLOR[type]);
+        const label = this.add
+          .text(x + SLOT / 2, 12 + SLOT - 5, AGENT_DEFS[type].name, { fontFamily: FONT, fontSize: '9px', color: UI.text })
+          .setOrigin(0.5, 1);
+        if (label.width > SLOT - 4) label.setScale((SLOT - 4) / label.width);
+        this.slotLayer.add([g, label]);
         frame.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.state.toggleBuild(type));
       } else {
-        frame.setAlpha(0.45);
+        frame.setAlpha(0.4);
       }
+    }
+    this.tabButtons.forEach((b, i) => {
+      const on = i === this.state.tab;
+      const color = CATEGORY_COLOR[CATEGORIES[i].id];
+      b.bg.setStrokeStyle(on ? 2 : 1, on ? color : UI.stroke);
+      b.text.setColor(on ? hex(color) : UI.muted);
     });
-    this.hotbar = this.add.container(0, 0, items);
+    this.refreshHotbar();
   }
+
+  private refreshHotbar(): void {
+    const tool = this.state.tool;
+    const types = CATEGORIES[this.state.tab].types;
+    this.slotFrames.forEach((f, i) => {
+      const active = tool.kind === 'build' && tool.type === types[i];
+      f.setStrokeStyle(2, active ? UI.accent : UI.stroke);
+    });
+  }
+
+  // ---------- canto superior direito ----------
 
   private buildTopRight(): void {
     const speeds: { s: Speed; label: string }[] = [
@@ -157,23 +247,13 @@ export class UIScene extends Phaser.Scene {
     return this.add.rectangle(x, y, w, h, UI.panel, UI.panelAlpha).setOrigin(0).setStrokeStyle(1, UI.stroke);
   }
 
-  private button(x: number, y: number, w: number, h: number, label: string, onClick: () => void): Button {
+  private button(x: number, y: number, w: number, h: number, label: string, onClick: () => void, size = 13): Button {
     const bg = this.add.rectangle(x, y, w, h, 0x1f2531).setOrigin(0).setStrokeStyle(1, UI.stroke).setInteractive({ useHandCursor: true });
-    const text = this.add.text(x + w / 2, y + h / 2, label, { fontFamily: FONT, fontSize: '13px', color: UI.text }).setOrigin(0.5);
+    const text = this.add.text(x + w / 2, y + h / 2, label, { fontFamily: FONT, fontSize: `${size}px`, color: UI.text }).setOrigin(0.5);
     bg.on('pointerover', () => bg.setFillStyle(0x2a3242));
     bg.on('pointerout', () => bg.setFillStyle(0x1f2531));
     bg.on('pointerdown', onClick);
     return { bg, text };
-  }
-
-  // ---------- estado ----------
-
-  private refreshHotbar(): void {
-    const tool = this.state.tool;
-    HOTBAR.forEach((type, i) => {
-      const active = tool.kind === 'build' && tool.type === type;
-      this.slotFrames[i].setStrokeStyle(2, active ? UI.accent : UI.stroke);
-    });
   }
 
   private refreshSpeed(): void {
@@ -198,21 +278,24 @@ export class UIScene extends Phaser.Scene {
   // ---------- layout responsivo ----------
 
   private layout(): void {
+    if (!this.hotbar || !this.help) return;
     const { width, height } = this.scale;
     const hbW = SLOTS * SLOT + (SLOTS - 1) * SLOT_GAP + 24;
-    const hbH = SLOT + 24;
+    const hbH = TAB_H + SLOT + 24;
     this.hotbar.setPosition(Math.round((width - hbW) / 2), height - hbH - 16);
     this.speedGroup.setPosition(width - this.speedGroup.width - 16, 16);
     this.toastText.setPosition(width / 2, 20);
 
-    const stockB = this.stockPanel.getBounds();
+    const sx = this.stockGroup.x;
+    const sy = this.stockGroup.y;
+    const sh = this.stockPanel.displayHeight;
+    this.help.setPosition(sx + 2, sy + sh + 12);
+    this.help.setVisible(this.help.y + this.help.height < this.hotbar.y - 8 || this.hotbar.x > this.help.x + this.help.width + 16);
+
     this.state.uiRects = [
       new Phaser.Geom.Rectangle(this.hotbar.x, this.hotbar.y, hbW, hbH),
       new Phaser.Geom.Rectangle(this.speedGroup.x, this.speedGroup.y, this.speedGroup.width, 48),
-      new Phaser.Geom.Rectangle(stockB.x, stockB.y, stockB.width, stockB.height),
+      new Phaser.Geom.Rectangle(sx, sy, STOCK_W, sh),
     ];
-    this.help.setPosition(stockB.x + 2, stockB.bottom + 12);
-    // Em telas baixas, a ajuda some para não colidir com a barra
-    this.help.setVisible(this.help.y + this.help.height < this.hotbar.y - 8 || this.hotbar.x > this.help.x + this.help.width + 16);
   }
 }

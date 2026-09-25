@@ -16,6 +16,8 @@ const TEST_ROWS = [
 ];
 const smallWorld = () => new World(GameMap.fromAscii(TEST_ROWS));
 
+const stock = (w: World, r: 'gelo' | 'regolito') => w.stockTotals()[r] ?? 0;
+
 function run(w: World, seconds: number) {
   for (let i = 0; i < Math.round(seconds * 10); i++) w.tick(0.1);
 }
@@ -66,9 +68,9 @@ describe('produção e contrapressão', () => {
     const s = placeOk(w, 'silo', 8, 2);
     connectOk(w, e, s);
     run(w, 120);
-    const stock = w.stockTotals().regolito;
-    expect(stock).toBeGreaterThanOrEqual(58);
-    expect(stock).toBeLessThanOrEqual(60);
+    const got = stock(w, 'regolito');
+    expect(got).toBeGreaterThanOrEqual(58);
+    expect(got).toBeLessThanOrEqual(60);
     expect(e.status).toBe('ok');
   });
 
@@ -77,12 +79,13 @@ describe('produção e contrapressão', () => {
     const es = [placeOk(w, 'extrator', 2, 1), placeOk(w, 'extrator', 2, 4), placeOk(w, 'extrator', 2, 7)];
     const u = placeOk(w, 'unificador', 7, 4);
     const s = placeOk(w, 'silo', 12, 4);
+    placeOk(w, 'painel_solar', 20, 4); // 3 extratores = 12 kW > 10 kW da cápsula
     es.forEach((e) => connectOk(w, e, u));
     connectOk(w, u, s);
     run(w, 120); // aquecimento (enche as filas)
-    const before = w.stockTotals().regolito;
+    const before = stock(w, 'regolito');
     run(w, 60);
-    const perMin = w.stockTotals().regolito - before;
+    const perMin = stock(w, 'regolito') - before;
     expect(perMin).toBeGreaterThanOrEqual(59);
     expect(perMin).toBeLessThanOrEqual(61);
     // 90/min de oferta para 60/min de vazão: alguém fica bloqueado
@@ -143,9 +146,10 @@ describe('Divisor e Unificador', () => {
     connectOk(w, eg, u);
     connectOk(w, u, s);
     run(w, 150); // silo tem 200 de capacidade
-    const t = w.stockTotals();
-    expect(Math.abs(t.gelo - t.regolito)).toBeLessThanOrEqual(2);
-    expect(t.gelo + t.regolito).toBeGreaterThan(130);
+    const g = stock(w, 'gelo');
+    const r = stock(w, 'regolito');
+    expect(Math.abs(g - r)).toBeLessThanOrEqual(2);
+    expect(g + r).toBeGreaterThan(130);
   });
 });
 

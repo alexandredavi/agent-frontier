@@ -19,7 +19,8 @@ npm run build    # gera a versão estática em dist/
 
 | Ação | Comando |
 | --- | --- |
-| Escolher agente | `1` Extrator · `2` Silo · `3` Divisor · `4` Unificador (ou clique na barra) |
+| Trocar aba da barra | `Tab` (Shift+Tab volta) ou clique na aba |
+| Escolher agente | `1`–`9` dentro da aba (ou clique no espaço) |
 | Construir | Clique no mapa com um agente escolhido |
 | Conectar | Arraste de um agente até outro (alcance 12 células, 60 itens/min) |
 | Demolir agente ou conexão | Passe o mouse por cima e aperte `X` |
@@ -28,11 +29,23 @@ npm run build    # gera a versão estática em dist/
 | Zoom | Roda do mouse |
 | Pausar / velocidade | `Espaço`, ou os botões ❚❚ 1× 2× 4× |
 
-## Regras do M2
+## Agentes
+
+| Aba | Agentes |
+| --- | --- |
+| Extração | Extrator (Gelo/Regolito 4 kW, Minério 6 kW) · Sensor (Telemetria) |
+| Processamento | Derretedor · Cartógrafo · Analista · Eletrolisador · Fundidor · Prensa · Construtor |
+| Logística | Silo · Divisor · Unificador · Descarte |
+| Energia | Painel Solar (+20 kW) |
+
+Receitas e números: `src/sim/defs.ts`. Matéria anda nas linhas como círculos; dados, como losangos.
+
+## Regras
 
 - O estoque conta só o que está guardado em **Silos**.
 - **Contrapressão:** nada se perde. Se o destino trava, a linha enche, o buffer da origem enche e a origem para. Anel âmbar = bloqueado; vermelho = bloqueado há mais de 5 s.
-- **Divisor:** 1 entrada, até 3 saídas, em rodízio (pula saídas travadas). **Unificador:** até 3 entradas alternadas, 1 saída.
+- **Receitas:** cada ingrediente tem buffer para 2 ciclos; a máquina aceita até 2 entradas. Item que ela não usa é recusado e trava a linha.
+- **Energia:** rede global. A cápsula de pouso dá 10 kW; cada Painel Solar, 20 kW. Máquinas só consomem trabalhando. Faltou energia, extração e processamento rodam na proporção disponível.
 
 O jogo salva sozinho no navegador a cada 10 s. Use **Exportar/Importar** para backup em arquivo.
 
@@ -53,6 +66,6 @@ Depuração no console do navegador: `agentFrontier.state.world`.
 
 - [x] **M1** — mapa, câmera, construir Extrator, produção e save
 - [x] **M2** — conexões ponto a ponto, itens fluindo, Silo, Divisor, Unificador
-- [ ] **M3** — receitas e energia
+- [x] **M3** — receitas Tier 0/1, energia, Cordilheira Ferrosa, barra com abas
 - [ ] **M4** — Oficina, cartões de diretiva e bancada de testes
 - [ ] **M5** — confiabilidade, Verificador, experiência/drift e metas da Arca

@@ -13,6 +13,8 @@ export class GameState {
   readonly clock = new SimClock();
   readonly events = new Phaser.Events.EventEmitter();
   tool: Tool = { kind: 'none' };
+  /** Aba ativa da barra de construção (índice em CATEGORIES). */
+  tab = 0;
   /** Retângulos da UI em coordenadas de tela, para não construir por baixo dos painéis. */
   uiRects: Phaser.Geom.Rectangle[] = [];
 
@@ -26,6 +28,11 @@ export class GameState {
   toggleBuild(type: AgentType): void {
     const same = this.tool.kind === 'build' && this.tool.type === type;
     this.setTool(same ? { kind: 'none' } : { kind: 'build', type });
+  }
+
+  setTab(tab: number): void {
+    this.tab = tab;
+    this.events.emit('tab', tab);
   }
 
   setSpeed(s: Speed): void {

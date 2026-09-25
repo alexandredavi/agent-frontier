@@ -7,6 +7,8 @@ const LEGEND: Record<string, Tile> = {
   '^': { terrain: 'rocha', node: null },
   r: { terrain: 'planicie', node: 'regolito' },
   i: { terrain: 'cratera', node: 'gelo' },
+  ',': { terrain: 'serra', node: null },
+  m: { terrain: 'serra', node: 'minerio' },
 };
 
 export class GameMap {
