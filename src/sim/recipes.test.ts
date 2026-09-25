@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AGENT_DEFS, CAPSULE_KW, outputPerMin } from './defs';
 import { type Design, TOOL_OF } from './designs';
-import { openMap } from './testMaps';
+import { openMap, testWorld } from './testMaps';
 import type { Agent, AgentType, ResourceId } from './types';
 import { World } from './world';
 
@@ -22,7 +22,7 @@ function feed(a: Agent) {
   const r = AGENT_DEFS[a.type].recipe!;
   for (const [res, n] of Object.entries(r.inputs)) a.inputs[res as ResourceId] = n! * 2;
 }
-const openWorld = () => new World(openMap(60, 30, [{ x: 2, y: 2, c: 'r' }, { x: 2, y: 8, c: 'i' }]));
+const openWorld = () => testWorld(openMap(60, 30, [{ x: 2, y: 2, c: 'r' }, { x: 2, y: 8, c: 'i' }]));
 
 describe('receitas', () => {
   it('valores por minuto batem com a tabela aprovada', () => {
@@ -122,7 +122,7 @@ describe('energia', () => {
 
 describe('cadeia completa', () => {
   it('Gelo + Telemetria + Minério + Regolito chegam a Módulos de habitat', () => {
-    const w = new World(
+    const w = testWorld(
       openMap(60, 40, [
         { x: 2, y: 2, c: 'i' }, { x: 2, y: 6, c: 'i' }, // gelo
         { x: 2, y: 20, c: 'r' }, // regolito

@@ -34,6 +34,8 @@ export type AgentType =
   | 'divisor'
   | 'unificador'
   | 'descarte'
+  | 'verificador'
+  | 'plataforma'
   | 'painel_solar';
 
 /** ok = funcionando · bloqueado = saída travada/cheio · ocioso = sem nada para fazer */
@@ -73,6 +75,15 @@ export interface Agent {
   inherited: number;
   /** Itens guardados: buffer de saída (máquinas/Divisor/Unificador) ou estoque (Silo). */
   buffer: Item[];
+  /** Verificador: itens aguardando inspeção e itens rejeitados aguardando saída. */
+  queue: Item[];
+  rejects: Item[];
+  /** Verificador: defeituosos pegos, bons rejeitados por engano, defeituosos que passaram. */
+  caught: number;
+  falsePos: number;
+  missed: number;
+  /** Sujeira do bioma onde o agente está (pp de confiabilidade). */
+  biome: number;
   status: AgentStatus;
   /** Segundos seguidos em estado bloqueado. */
   stalledFor: number;
@@ -111,4 +122,13 @@ export interface PowerState {
   demand: number;
   /** Fração de velocidade aplicada (0..1). */
   factor: number;
+}
+
+export interface ArcaState {
+  /** Fase atual (índice em ARCA_PHASES). */
+  phase: number;
+  delivered: number;
+  rejected: number;
+  /** Todas as fases concluídas. */
+  done: boolean;
 }

@@ -33,6 +33,8 @@ export class Workshop {
   private selectedId: string;
   private draft: Draft | null = null;
   private bench: Bench = { running: false, progress: 0 };
+  /** Recalibração em andamento (animação da bancada com dados novos). */
+  private recal: { id: string; progress: number } | null = null;
   /** Pergunta pendente depois de salvar: atualizar agentes da versão anterior? */
   private ask: { fromId: string; toId: string; count: number } | null = null;
 
@@ -153,6 +155,29 @@ export class Workshop {
     this.render();
   }
 
+  private recalibrate(id: string): void {
+    if (this.recal) return;
+    const t0 = performance.now();
+    this.recal = { id, progress: 0 };
+    const step = () => {
+      if (!this.recal) return;
+      this.recal.progress = Math.min(1, (performance.now() - t0) / 1500);
+      const bar = this.root.querySelector<HTMLDivElement>('[data-recal] > div');
+      if (bar) bar.style.width = `${this.recal.progress * 100}%`;
+      if (this.recal.progress < 1) requestAnimationFrame(step);
+      else {
+        this.world.recalibrate(id);
+        const n = this.world.agentsUsing(id).length;
+        this.recal = null;
+        this.state.toast(`${this.world.designs.get(id)!.name} recalibrada · ${n} agente${n === 1 ? '' : 's'} sem drift`);
+        this.state.events.emit('designs-changed');
+        this.render();
+      }
+    };
+    this.render();
+    requestAnimationFrame(step);
+  }
+
   private answer(all: boolean): void {
     if (!this.ask) return;
     if (all) {
@@ -177,8 +202,10 @@ export class Workshop {
         .map((d) => {
           const n = w.agentsUsing(d.id).length;
           const star = w.activeDesign[role] === d.id ? '<span class="badge star" title="Na barra">★</span>' : '';
+          const drift = d.drift ? `<span class="badge" style="color:#f5b041" title="Precisa recalibrar">⚠ drift −${d.drift}</span>` : '';
+          const lock = !w.isUnlocked(role) ? '<span class="badge">🔒 Tier 1</span>' : '';
           return `<div class="row ${d.id === sel.id && !this.draft ? 'sel' : ''}" data-sel="${d.id}">
-            <span>${esc(d.name)}${d.factory ? '<span class="badge">fábrica</span>' : ''}${star}</span>
+            <span>${esc(d.name)}${d.factory ? '<span class="badge">fábrica</span>' : ''}${star}${drift}${lock}</span>
             <span class="badge">${n} agente${n === 1 ? '' : 's'}</span></div>`;
         })
         .join('');
@@ -206,8 +233,8 @@ export class Workshop {
     };
     return `<table>
       <tr><th></th><th>${base ? 'Esta' : ''}</th>${b ? '<th>Base</th>' : ''}</tr>
-      <tr><td>Itens/min</td><td>${cmp(a.perMin, b?.perMin)}</td>${b ? `<td>${fmt(b.perMin)}</td>` : ''}</tr>
-      <tr><td>Confiabilidade</td><td>${cmp(a.reliability, b?.reliability, true, '%')}</td>${b ? `<td>${fmt(b.reliability)}%</td>` : ''}</tr>
+      <tr><td>${cur.role === 'verificador' ? 'Inspeções/min' : 'Itens/min'}</td><td>${cmp(a.perMin, b?.perMin)}</td>${b ? `<td>${fmt(b.perMin)}</td>` : ''}</tr>
+      <tr><td>${cur.role === 'verificador' ? 'Detecção' : 'Confiabilidade'} (bancada)</td><td>${cmp(a.reliability, b?.reliability, true, '%')}</td>${b ? `<td>${fmt(b.reliability)}%</td>` : ''}</tr>
       <tr><td>Consumo (trabalhando)</td><td>${cmp(kw(cur), base ? kw(base) : undefined, false, ' kW')}</td>${base ? `<td>${fmt(kw(base))} kW</td>` : ''}</tr>
     </table>`;
   }
@@ -215,14 +242,22 @@ export class Workshop {
   private viewHtml(d: Design): string {
     const cards = d.cards.length ? d.cards.map((c) => CARDS[c].name).join(', ') : 'nenhum';
     const active = this.world.activeDesign[d.role] === d.id;
+    const locked = !this.world.designUnlocked(d);
+    const n = this.world.agentsUsing(d.id).length;
+    const drift = d.drift
+      ? `<div class="ask" style="border-color:#f5b041;background:#2a2110">⚠ <b>Drift −${d.drift} pp</b>: o ambiente mudou depois que esta versão foi calibrada. ${n} agente${n === 1 ? '' : 's'} afetado${n === 1 ? '' : 's'}.
+         ${this.recal?.id === d.id ? '<div class="bar" data-recal><div></div></div><div class="note">Recalibrando com dados novos…</div>' : `<div class="actions"><button class="primary" data-act="recal">Recalibrar (rodar bancada com dados novos)</button></div>`}</div>`
+      : '';
     return `
       <h3>${esc(d.name)}</h3>
       <div class="note">${CORES[d.core].name} · ${TOOLS[d.tool].name} · Cartões: ${esc(cards)}</div>
       <div class="note">Receita: ${recipeText(d.role)}</div>
       ${this.statsTable(d)}
+      ${drift}
+      ${locked ? '<div class="note">🔒 Liberado no Tier 1 (entregue 20 Mapas de pouso à Arca).</div>' : ''}
       <div class="actions">
-        <button class="primary" data-act="dup">${d.factory ? 'Duplicar para editar' : 'Criar nova versão a partir desta'}</button>
-        <button data-act="activate" ${active ? 'disabled' : ''}>${active ? '★ Na barra' : 'Usar na barra'}</button>
+        <button class="primary" data-act="dup" ${locked ? 'disabled' : ''}>${d.factory ? 'Duplicar para editar' : 'Criar nova versão a partir desta'}</button>
+        <button data-act="activate" ${active || locked ? 'disabled' : ''}>${active ? '★ Na barra' : 'Usar na barra'}</button>
       </div>
       ${
         this.ask
@@ -237,13 +272,19 @@ export class Workshop {
     const base = this.world.designs.get(d.baseId)!;
     const core = CORES[d.core];
     const cur = this.draftDesign();
+    const w = this.world;
     const toolBtns = (Object.keys(TOOLS) as ToolId[])
-      .map((t) => `<button class="${t === d.tool ? 'on' : ''}" data-tool="${t}">${TOOLS[t].name}</button>`)
+      .map((t) => {
+        const ok = TOOLS[t].roles.some((r) => w.isUnlocked(r));
+        return `<button class="${t === d.tool ? 'on' : ''}" data-tool="${t}" ${ok ? '' : 'disabled title="Tier 1"'}>${TOOLS[t].name}${ok ? '' : ' 🔒'}</button>`;
+      })
       .join('');
     const roles = TOOLS[d.tool].roles;
     const recipeBtns =
       roles.length > 1
-        ? `<h3>Receita</h3><div class="actions" style="margin-top:0">${roles.map((r) => `<button class="${r === d.role ? 'on' : ''}" data-role="${r}">${AGENT_DEFS[r].name}</button>`).join('')}</div>`
+        ? `<h3>Receita</h3><div class="actions" style="margin-top:0">${roles
+            .map((r) => `<button class="${r === d.role ? 'on' : ''}" data-role="${r}" ${w.isUnlocked(r) ? '' : 'disabled'}>${AGENT_DEFS[r].name}${w.isUnlocked(r) ? '' : ' 🔒'}</button>`)
+            .join('')}</div>`
         : '';
     const slots = Array.from({ length: core.slots }, (_, i) => {
       const c = d.cards[i];
@@ -265,7 +306,10 @@ export class Workshop {
       <input type="text" data-name value="${esc(d.name)}" maxlength="40" />
       <h3>Núcleo</h3>
       <div class="actions" style="margin-top:0">${(Object.keys(CORES) as CoreId[])
-        .map((c) => `<button class="${c === d.core ? 'on' : ''}" data-core="${c}">${CORES[c].name} <small>(${CORES[c].slots} slots)</small></button>`)
+        .map((c) => {
+          const lockedCore = c === 'avancado' && w.tier < 1;
+          return `<button class="${c === d.core ? 'on' : ''}" data-core="${c}" ${lockedCore ? 'disabled' : ''}>${CORES[c].name} <small>(${CORES[c].slots} slots${lockedCore ? ' · 🔒 Tier 1' : ''})</small></button>`;
+        })
         .join('')}</div>
       <h3>Ferramenta</h3>
       <div class="grid">${toolBtns}</div>
@@ -337,6 +381,7 @@ export class Workshop {
       this.state.events.emit('designs-changed');
       this.render();
     });
+    act('recal', () => this.recalibrate(this.selectedId));
     act('apply-all', () => this.answer(true));
     act('apply-new', () => this.answer(false));
     act('bench', () => this.runBench());
@@ -366,7 +411,7 @@ export class Workshop {
     q('[data-tool]').forEach((b) =>
       b.addEventListener('click', () => {
         d.tool = b.dataset.tool as ToolId;
-        if (!TOOLS[d.tool].roles.includes(d.role)) d.role = TOOLS[d.tool].roles[0];
+        if (!TOOLS[d.tool].roles.includes(d.role)) d.role = TOOLS[d.tool].roles.find((r) => this.world.isUnlocked(r)) ?? TOOLS[d.tool].roles[0];
         this.autoName();
         changed();
       }),

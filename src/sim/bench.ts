@@ -1,4 +1,4 @@
-import { AGENT_DEFS, agentKw } from './defs';
+import { AGENT_DEFS, VERIFIER, agentKw } from './defs';
 import { type Design, designStats } from './designs';
 import { Rng } from './rng';
 
@@ -24,10 +24,12 @@ export interface BenchResult {
  */
 export function runBench(design: Design, samples = 100, rng = new Rng((Math.random() * 2 ** 32) >>> 0)): BenchResult {
   const st = designStats(design);
-  const recipe = AGENT_DEFS[design.role].recipe!;
+  const recipe = AGENT_DEFS[design.role].recipe;
+  // Verificador: amostras são itens defeituosos; "bom" = defeito detectado.
   let good = 0;
   for (let i = 0; i < samples; i++) if (st.reliability >= 100 || !rng.chance(1 - st.reliability / 100)) good++;
-  const cycles = Math.ceil(samples / recipe.output.n);
+  const cycles = recipe ? Math.ceil(samples / recipe.output.n) : samples;
+  const cycleTime = recipe ? recipe.cycle : 60 / VERIFIER.ratePerMin;
   return {
     samples,
     good,
@@ -35,6 +37,6 @@ export function runBench(design: Design, samples = 100, rng = new Rng((Math.rand
     measured: (good / samples) * 100,
     perMin: st.perMin,
     kw: agentKw(design.role, null) * st.kwMult,
-    gameSeconds: (cycles * recipe.cycle) / st.speed,
+    gameSeconds: (cycles * cycleTime) / st.speed,
   };
 }

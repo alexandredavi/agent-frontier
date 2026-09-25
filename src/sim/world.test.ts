@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GameMap } from './map';
 import { MAP_ROWS } from './mapData';
-import { openMap } from './testMaps';
+import { openMap, testWorld } from './testMaps';
 import type { Agent } from './types';
 import { World } from './world';
 
@@ -14,7 +14,7 @@ const TEST_ROWS = [
   '#:iirr#',
   '#######',
 ];
-const smallWorld = () => new World(GameMap.fromAscii(TEST_ROWS));
+const smallWorld = () => testWorld(GameMap.fromAscii(TEST_ROWS));
 
 const stock = (w: World, r: 'gelo' | 'regolito') => w.stockTotals()[r] ?? 0;
 
@@ -63,7 +63,7 @@ describe('produção e contrapressão', () => {
   });
 
   it('Extrator → Silo entrega 30/min e o estoque conta só o silo', () => {
-    const w = new World(openMap(30, 10, [{ x: 2, y: 2, c: 'r' }]));
+    const w = testWorld(openMap(30, 10, [{ x: 2, y: 2, c: 'r' }]));
     const e = placeOk(w, 'extrator', 2, 2);
     const s = placeOk(w, 'silo', 8, 2);
     connectOk(w, e, s);
@@ -75,7 +75,7 @@ describe('produção e contrapressão', () => {
   });
 
   it('linha Mk1 limita a vazão a 60/min', () => {
-    const w = new World(openMap(40, 12, [{ x: 2, y: 1, c: 'r' }, { x: 2, y: 4, c: 'r' }, { x: 2, y: 7, c: 'r' }]));
+    const w = testWorld(openMap(40, 12, [{ x: 2, y: 1, c: 'r' }, { x: 2, y: 4, c: 'r' }, { x: 2, y: 7, c: 'r' }]));
     const es = [placeOk(w, 'extrator', 2, 1), placeOk(w, 'extrator', 2, 4), placeOk(w, 'extrator', 2, 7)];
     const u = placeOk(w, 'unificador', 7, 4);
     const s = placeOk(w, 'silo', 12, 4);
@@ -93,7 +93,7 @@ describe('produção e contrapressão', () => {
   });
 
   it('destino travado faz a fila encher e a origem parar sem perder itens', () => {
-    const w = new World(openMap(30, 10, [{ x: 2, y: 2, c: 'r' }]));
+    const w = testWorld(openMap(30, 10, [{ x: 2, y: 2, c: 'r' }]));
     const e = placeOk(w, 'extrator', 2, 2);
     const d = placeOk(w, 'divisor', 8, 2); // sem saídas: trava após 2 itens
     const c = connectOk(w, e, d);
@@ -109,7 +109,7 @@ describe('produção e contrapressão', () => {
 
 describe('Divisor e Unificador', () => {
   it('Divisor distribui em rodízio entre 3 saídas', () => {
-    const w = new World(openMap(40, 14, [{ x: 2, y: 6, c: 'r' }]));
+    const w = testWorld(openMap(40, 14, [{ x: 2, y: 6, c: 'r' }]));
     const e = placeOk(w, 'extrator', 2, 6);
     const d = placeOk(w, 'divisor', 7, 6);
     const silos = [placeOk(w, 'silo', 12, 2), placeOk(w, 'silo', 12, 6), placeOk(w, 'silo', 12, 10)];
@@ -122,7 +122,7 @@ describe('Divisor e Unificador', () => {
   });
 
   it('Divisor pula a saída travada', () => {
-    const w = new World(openMap(40, 14, [{ x: 2, y: 6, c: 'r' }]));
+    const w = testWorld(openMap(40, 14, [{ x: 2, y: 6, c: 'r' }]));
     const e = placeOk(w, 'extrator', 2, 6);
     const d = placeOk(w, 'divisor', 7, 6);
     const s = placeOk(w, 'silo', 12, 2);
@@ -137,7 +137,7 @@ describe('Divisor e Unificador', () => {
   });
 
   it('Unificador alterna entre as entradas', () => {
-    const w = new World(openMap(40, 12, [{ x: 2, y: 1, c: 'r' }, { x: 2, y: 7, c: 'i' }]));
+    const w = testWorld(openMap(40, 12, [{ x: 2, y: 1, c: 'r' }, { x: 2, y: 7, c: 'i' }]));
     const er = placeOk(w, 'extrator', 2, 1);
     const eg = placeOk(w, 'extrator', 2, 7);
     const u = placeOk(w, 'unificador', 7, 4);
@@ -146,7 +146,8 @@ describe('Divisor e Unificador', () => {
     connectOk(w, eg, u);
     connectOk(w, u, s);
     run(w, 150); // silo tem 200 de capacidade
-    const g = stock(w, 'gelo');
+    // Gelo vem das Crateras (sujeira do bioma): conta bons + defeituosos
+    const g = stock(w, 'gelo') + (w.defectTotals().gelo ?? 0);
     const r = stock(w, 'regolito');
     expect(Math.abs(g - r)).toBeLessThanOrEqual(2);
     expect(g + r).toBeGreaterThan(130);
@@ -155,7 +156,7 @@ describe('Divisor e Unificador', () => {
 
 describe('regras de conexão', () => {
   it('valida portas, alcance e duplicatas', () => {
-    const w = new World(openMap(40, 20, [{ x: 2, y: 2, c: 'r' }]));
+    const w = testWorld(openMap(40, 20, [{ x: 2, y: 2, c: 'r' }]));
     const e = placeOk(w, 'extrator', 2, 2);
     const s1 = placeOk(w, 'silo', 14, 2); // centros a 12 células
     const far = placeOk(w, 'silo', 15, 6);
@@ -174,7 +175,7 @@ describe('regras de conexão', () => {
   });
 
   it('demolir remove as conexões; linha é encontrada perto do ponteiro', () => {
-    const w = new World(openMap(30, 10, [{ x: 2, y: 2, c: 'r' }]));
+    const w = testWorld(openMap(30, 10, [{ x: 2, y: 2, c: 'r' }]));
     const e = placeOk(w, 'extrator', 2, 2);
     const s = placeOk(w, 'silo', 10, 2);
     const c = connectOk(w, e, s);

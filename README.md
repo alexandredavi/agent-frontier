@@ -52,6 +52,13 @@ Agentes de IA (extração e processamento) são montados com **Núcleo + Ferrame
 
 **Alucinações:** cada item pode sair defeituoso. Parece normal, mas contamina quem o consome: a chance de cada item sair bom é *confiabilidade × (fração de ingredientes bons)²*. No HUD, "+N def." mostra os defeituosos guardados nos silos. A confiabilidade se acumula na cadeia (Módulo de habitat: ~63% bons com versões de fábrica, ~91% com Núcleo Avançado, ~96% com Avançado + Cuidadoso).
 
+## Arca, tiers e qualidade (M5)
+
+- **Metas da Arca** (painel ARCA no HUD): entregue cargas numa **Plataforma de Carga**. Fase 1: 20 Mapas de pouso → libera o **Tier 1** (Minério, Analista, Eletrolisador, Fundidor, Prensa, Construtor, Núcleo Avançado). Fase 2: 50 Módulos de habitat → protótipo concluído. Só itens bons contam; a Plataforma recusa cargas de outra fase.
+- **Verificador** (ferramenta Scanner, na Oficina): inspeciona 30 itens/min. Detecta 90% dos defeituosos (até 99% com Núcleo Avançado + Cuidadoso) e rejeita 2% dos bons por engano (1% com Cuidadoso). 1ª saída = aprovados, 2ª = rejeitados.
+- **Confiabilidade real** = versão − sujeira do bioma (Crateras −10, Cordilheira −5) − drift + experiência (+1 pp a cada 500 itens, até +10). A bancada testa com amostras limpas: **teste ≠ produção**. O cartão **Filtrar entrada suja** anula o bioma (×0,85 velocidade).
+- **Drift:** ao liberar o Tier 1 o ambiente muda e as versões existentes perdem 5 pp. Recalibre cada versão na Oficina.
+
 ## Regras
 
 - O estoque conta só o que está guardado em **Silos**.
@@ -80,4 +87,4 @@ Depuração no console do navegador: `agentFrontier.state.world`.
 - [x] **M2** — conexões ponto a ponto, itens fluindo, Silo, Divisor, Unificador
 - [x] **M3** — receitas Tier 0/1, energia, Cordilheira Ferrosa, barra com abas
 - [x] **M4** — Oficina, cartões de diretiva, bancada de testes, versões e confiabilidade
-- [ ] **M5** — Verificador, sujeira do bioma, experiência/drift, bloqueio por tier e metas da Arca
+- [x] **M5** — Verificador, sujeira do bioma, experiência/drift, tiers e metas da Arca (MVP completo)

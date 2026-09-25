@@ -1,10 +1,10 @@
-import { AGENT_DEFS, AGENT_SIZE, CAPSULE_KW, INHERIT_EXPONENT, INPUT_CYCLES, LINK, agentKw } from './defs';
-import { type Design, type DesignStats, MACHINE_ROLES, designStats, factoryDesign, factoryId, isMachine } from './designs';
+import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, BIOME_PENALTY, CAPSULE_KW, DRIFT_PP, INHERIT_EXPONENT, INPUT_CYCLES, LINK, TIER1_NODES, TIER1_TYPES, VERIFIER, XP_MAX, XP_PER_PP, agentKw } from './defs';
+import { BASE_RELIABILITY, type Design, type DesignStats, MACHINE_ROLES, designStats, factoryDesign, factoryId, isMachine } from './designs';
 import type { GameMap } from './map';
 import { Rng } from './rng';
-import type { Agent, AgentType, Connection, PowerState, ResourceId } from './types';
+import type { Agent, AgentType, ArcaState, Connection, Item, PowerState, ResourceId } from './types';
 
-export type PlaceError = 'fora-do-mapa' | 'sinal-fraco' | 'terreno' | 'ocupado' | 'sem-no' | 'nos-misturados';
+export type PlaceError = 'fora-do-mapa' | 'sinal-fraco' | 'terreno' | 'ocupado' | 'sem-no' | 'nos-misturados' | 'bloqueado';
 
 export const PLACE_ERROR_TEXT: Record<PlaceError, string> = {
   'fora-do-mapa': 'Fora do mapa',
@@ -13,6 +13,7 @@ export const PLACE_ERROR_TEXT: Record<PlaceError, string> = {
   ocupado: 'Já existe um agente aqui',
   'sem-no': 'O Extrator precisa ficar sobre um nó de recurso',
   'nos-misturados': 'Cobre dois recursos diferentes',
+  bloqueado: 'Liberado no Tier 1 — entregue 20 Mapas de pouso à Arca',
 };
 
 export type ConnectError = 'mesmo-agente' | 'longe-demais' | 'sem-saida' | 'saidas-cheias' | 'sem-entrada' | 'entradas-cheias' | 'ja-conectado';
@@ -54,6 +55,12 @@ export function newAgent(id: number, type: AgentType, x: number, y: number, reso
     defects: 0,
     inherited: 0,
     buffer: [],
+    queue: [],
+    rejects: [],
+    caught: 0,
+    falsePos: 0,
+    missed: 0,
+    biome: 0,
     status: 'ocioso',
     stalledFor: 0,
     sinceOut: 0,
@@ -74,6 +81,11 @@ export class World {
   /** Versão usada na barra para cada papel. */
   readonly activeDesign: Partial<Record<AgentType, string>> = {};
   rng = new Rng();
+  /** Tier liberado (0 no início; 1 depois da Fase 0 da Arca). */
+  tier = 0;
+  arca: ArcaState = { phase: 0, delivered: 0, rejected: 0, done: false };
+  /** Acontecimentos para a interface anunciar ('tier1', 'vitoria'); ela esvazia a fila. */
+  events: string[] = [];
   private statsCache = new Map<string, DesignStats>();
 
   private readonly occupancy: Int32Array;
@@ -137,6 +149,78 @@ export class World {
     return n;
   }
 
+  /** Tira o drift de uma versão (todos os agentes dela voltam ao normal). */
+  recalibrate(designId: string): void {
+    const d = this.designs.get(designId);
+    if (d) d.drift = 0;
+  }
+
+  /** Experiência do agente em pp (+1 a cada 500 itens processados, até 10). */
+  xp(a: Agent): number {
+    return a.designId ? Math.min(XP_MAX, Math.floor(a.produced / XP_PER_PP)) : 0;
+  }
+
+  /** Composição da confiabilidade no mapa: versão − bioma − drift + experiência. */
+  reliabilityBreakdown(a: Agent): { design: number; biome: number; drift: number; xp: number; real: number } {
+    const d = this.designOf(a);
+    if (!d) return { design: 100, biome: 0, drift: 0, xp: 0, real: 100 };
+    const st = this.stats(d.id);
+    const biome = st.filtersBiome ? 0 : a.biome;
+    const drift = d.drift ?? 0;
+    const xp = this.xp(a);
+    const cap = Math.max(BASE_RELIABILITY[d.role], 99);
+    const real = Math.max(5, Math.min(cap, st.reliability - biome - drift + xp));
+    return { design: st.reliability, biome, drift, xp, real };
+  }
+
+  /** Confiabilidade real (%) do agente no mapa. */
+  reliability(a: Agent): number {
+    return this.reliabilityBreakdown(a).real;
+  }
+
+  // ---------- tiers e Arca ----------
+
+  isUnlocked(type: AgentType, resource: ResourceId | null = null): boolean {
+    if (this.tier >= 1) return true;
+    return !TIER1_TYPES.includes(type) && !(resource && TIER1_NODES.includes(resource));
+  }
+
+  designUnlocked(d: Design): boolean {
+    return this.tier >= 1 || (d.core !== 'avancado' && this.isUnlocked(d.role));
+  }
+
+  /** Libera o Tier 1: as versões existentes sofrem drift (o ambiente mudou). */
+  unlockTier1(withDrift = true): void {
+    if (this.tier >= 1) return;
+    this.tier = 1;
+    if (withDrift) for (const d of this.designs.values()) d.drift = DRIFT_PP;
+    this.events.push('tier1');
+  }
+
+  /** A Plataforma de Carga aceita este item? (só cargas da fase atual) */
+  private cargoWanted(res: ResourceId): boolean {
+    if (this.arca.done) return ARCA_PHASES.some((p) => p.res === res);
+    return ARCA_PHASES[this.arca.phase].res === res;
+  }
+
+  private deliver(item: Item): void {
+    if (this.arca.done) return;
+    if (item.bad) {
+      this.arca.rejected++;
+      return;
+    }
+    this.arca.delivered++;
+    const phase = ARCA_PHASES[this.arca.phase];
+    if (this.arca.delivered < phase.n) return;
+    if (this.arca.phase === 0) this.unlockTier1();
+    if (this.arca.phase + 1 < ARCA_PHASES.length) {
+      this.arca = { phase: this.arca.phase + 1, delivered: 0, rejected: 0, done: false };
+    } else {
+      this.arca = { ...this.arca, done: true };
+      this.events.push('vitoria');
+    }
+  }
+
   /** Consumo de um agente trabalhando (kW), já com os módulos. */
   agentPower(a: Agent): number {
     const base = agentKw(a.type, a.resource);
@@ -159,10 +243,11 @@ export class World {
         if (tile.node) found.add(tile.node);
       }
     }
-    if (!AGENT_DEFS[type].needsNode) return { ok: true, resource: null };
+    if (!AGENT_DEFS[type].needsNode) return this.isUnlocked(type) ? { ok: true, resource: null } : { ok: false, reason: 'bloqueado' };
     if (found.size === 0) return { ok: false, reason: 'sem-no' };
     if (found.size > 1) return { ok: false, reason: 'nos-misturados' };
-    return { ok: true, resource: [...found][0] };
+    const resource = [...found][0];
+    return this.isUnlocked(type, resource) ? { ok: true, resource } : { ok: false, reason: 'bloqueado' };
   }
 
   /** Constrói um agente. Para agentes de IA, `designId` escolhe a versão (padrão: a ativa na barra). */
@@ -176,7 +261,10 @@ export class World {
     }
     const check = this.canPlace(type, x, y);
     if (!check.ok) return check;
+    const d = design ? this.designs.get(design) : undefined;
+    if (d && !this.designUnlocked(d)) return { ok: false, reason: 'bloqueado' };
     const agent = newAgent(this.nextId++, type, x, y, check.resource, design);
+    agent.biome = this.biomeAt(x, y);
     this.agents.set(agent.id, agent);
     this.fill(agent, agent.id);
     return { ok: true, agent };
@@ -192,6 +280,14 @@ export class World {
     this.fill(agent, 0);
     this.agents.delete(id);
     return agent;
+  }
+
+  /** Pior sujeira sob a área 2x2 do agente. */
+  biomeAt(x: number, y: number): number {
+    let worst = 0;
+    for (let dy = 0; dy < AGENT_SIZE; dy++)
+      for (let dx = 0; dx < AGENT_SIZE; dx++) worst = Math.max(worst, BIOME_PENALTY[this.map.terrainAt(x + dx, y + dy) ?? 'planicie'] ?? 0);
+    return worst;
   }
 
   agentAt(x: number, y: number): Agent | undefined {
@@ -303,6 +399,10 @@ export class World {
         return a.buffer.length < def.capacity;
       case 'descarte':
         return true;
+      case 'plataforma':
+        return this.cargoWanted(res);
+      case 'verificador':
+        return a.queue.length < 2;
       default:
         return def.recipe ? (a.inputs[res] ?? 0) < this.inputCap(a, res) : false;
     }
@@ -317,6 +417,13 @@ export class World {
         break;
       case 'descarte':
         a.produced++;
+        break;
+      case 'plataforma':
+        a.produced++;
+        this.deliver({ res, bad });
+        break;
+      case 'verificador':
+        a.queue.push({ res, bad });
         break;
       default:
         a.inputs[res] = (a.inputs[res] ?? 0) + 1;
@@ -364,7 +471,7 @@ export class World {
     const r = AGENT_DEFS[a.type].recipe!;
     a.running = false;
     const res = r.output.res ?? a.resource;
-    const rel = a.designId ? this.stats(a.designId).reliability : 100;
+    const rel = this.reliability(a);
     if (res) {
       for (let i = 0; i < r.output.n; i++) {
         const own = rel >= 100 || !this.rng.chance(1 - rel / 100);
@@ -392,6 +499,13 @@ export class World {
     const workers: Agent[] = [];
     let demand = 0;
     for (const a of this.agents.values()) {
+      if (a.type === 'verificador') {
+        if (a.queue.length > 0 && a.buffer.length + a.rejects.length < AGENT_DEFS.verificador.capacity) {
+          workers.push(a);
+          demand += this.agentPower(a);
+        }
+        continue;
+      }
       if (!AGENT_DEFS[a.type].recipe) continue;
       if (!a.running && this.canStart(a)) this.start(a);
       if (a.running) {
@@ -405,6 +519,10 @@ export class World {
 
     // 3. Produção (ciclos), na velocidade que a energia permite
     for (const a of workers) {
+      if (a.type === 'verificador') {
+        this.inspect(a, dt * factor);
+        continue;
+      }
       const cycle = AGENT_DEFS[a.type].recipe!.cycle;
       const speed = a.designId ? this.stats(a.designId).speed : 1;
       a.progress += (dt * factor * speed) / cycle;
@@ -447,6 +565,7 @@ export class World {
             break;
           }
           if (recipe && !(front.res in recipe.inputs)) a.refusing = front.res;
+          if (a.type === 'plataforma' && !this.cargoWanted(front.res)) a.refusing = front.res;
         }
       }
     }
@@ -456,6 +575,13 @@ export class World {
       a.sinceOut += dt;
       const outs = this.outputsOf(a.id);
       if (outs.length === 0) continue;
+      if (a.type === 'verificador') {
+        // 1ª saída = aprovados; 2ª = rejeitados (sem 2ª ligada, rejeitados são destruídos)
+        this.sendFrom(a, a.buffer, outs[0], interval);
+        if (outs[1]) this.sendFrom(a, a.rejects, outs[1], interval);
+        else a.rejects.length = 0;
+        continue;
+      }
       let sent = true;
       while (sent && a.buffer.length > 0) {
         sent = false;
@@ -483,6 +609,44 @@ export class World {
     }
   }
 
+  /** Verificador: inspeciona itens da fila na velocidade da versão. */
+  private inspect(a: Agent, dt: number): void {
+    const st = this.stats(a.designId!);
+    const cap = AGENT_DEFS.verificador.capacity;
+    a.progress += (dt * st.speed * VERIFIER.ratePerMin) / 60;
+    while (a.progress >= 1 && a.queue.length > 0 && a.buffer.length + a.rejects.length < cap) {
+      a.progress -= 1;
+      const it = a.queue.shift()!;
+      a.produced++;
+      const detect = this.reliability(a) / 100;
+      if (it.bad) {
+        if (this.rng.chance(detect)) {
+          a.caught++;
+          a.rejects.push(it);
+        } else {
+          a.missed++;
+          a.buffer.push(it);
+        }
+      } else if (this.rng.chance(st.falsePositive)) {
+        a.falsePos++;
+        a.rejects.push(it);
+      } else {
+        a.buffer.push(it);
+      }
+    }
+    if (a.queue.length === 0) a.progress = Math.min(a.progress, 1);
+  }
+
+  private sendFrom(a: Agent, from: Item[], c: Connection, interval: number): void {
+    if (from.length === 0 || c.cooldown > 1e-9) return;
+    const last = c.items[c.items.length - 1];
+    if (last && last.pos < LINK.gap - 1e-9) return;
+    const it = from.shift()!;
+    c.items.push({ res: it.res, bad: it.bad, pos: 0 });
+    c.cooldown = interval;
+    a.sinceOut = 0;
+  }
+
   private computeStatus(a: Agent): Agent['status'] {
     const def = AGENT_DEFS[a.type];
     // Cheio só conta como bloqueado se também não conseguiu enviar nada há um tempo
@@ -498,7 +662,13 @@ export class World {
       case 'painel_solar':
         return 'ok';
       case 'descarte':
+      case 'plataforma':
         return this.inputsOf(a.id).length > 0 ? 'ok' : 'ocioso';
+      case 'verificador': {
+        const full = a.buffer.length + a.rejects.length >= def.capacity;
+        if (full && stuck) return 'bloqueado';
+        return a.queue.length > 0 || a.sinceOut < 1.5 ? 'ok' : 'ocioso';
+      }
       case 'silo':
         return a.buffer.length >= def.capacity && stuck ? 'bloqueado' : this.inputsOf(a.id).length > 0 ? 'ok' : 'ocioso';
       default: {

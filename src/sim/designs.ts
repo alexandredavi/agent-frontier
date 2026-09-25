@@ -1,13 +1,13 @@
-import { AGENT_DEFS } from './defs';
+import { AGENT_DEFS, VERIFIER } from './defs';
 import type { AgentType } from './types';
 
 /** Agentes de IA (montados na Oficina). Logística e energia são infraestrutura pronta. */
-export const MACHINE_ROLES: AgentType[] = ['extrator', 'sensor', 'derretedor', 'cartografo', 'analista', 'eletrolisador', 'fundidor', 'prensa', 'construtor'];
+export const MACHINE_ROLES: AgentType[] = ['extrator', 'sensor', 'derretedor', 'cartografo', 'analista', 'eletrolisador', 'fundidor', 'prensa', 'construtor', 'verificador'];
 
 export const isMachine = (t: AgentType): boolean => MACHINE_ROLES.includes(t);
 
 export type CoreId = 'basico' | 'avancado';
-export type ToolId = 'broca' | 'antena' | 'aquecedor' | 'laboratorio' | 'celula' | 'forno' | 'braco' | 'montador';
+export type ToolId = 'broca' | 'antena' | 'aquecedor' | 'laboratorio' | 'celula' | 'forno' | 'braco' | 'montador' | 'scanner';
 export type CardId = 'acelerar' | 'cuidadoso' | 'economico' | 'filtrar';
 
 export const CORES: Record<CoreId, { name: string; speed: number; rel: number; kw: number; slots: number }> = {
@@ -25,6 +25,7 @@ export const TOOLS: Record<ToolId, { name: string; roles: AgentType[] }> = {
   forno: { name: 'Forno', roles: ['fundidor'] },
   braco: { name: 'Braço soldador', roles: ['prensa'] },
   montador: { name: 'Montador', roles: ['construtor'] },
+  scanner: { name: 'Scanner', roles: ['verificador'] },
 };
 
 export const TOOL_OF: Record<string, ToolId> = Object.fromEntries(
@@ -37,6 +38,8 @@ export interface CardDef {
   speed?: number;
   rel?: number;
   kw?: number;
+  /** Anula a sujeira do bioma. */
+  filtersBiome?: boolean;
   /** Ainda não disponível (liberado em outro marco). */
   lockedUntil?: string;
 }
@@ -45,7 +48,7 @@ export const CARDS: Record<CardId, CardDef> = {
   acelerar: { name: 'Acelerar', effect: '×1,5 velocidade · −10 pp confiabilidade', speed: 1.5, rel: -10 },
   cuidadoso: { name: 'Cuidadoso', effect: '×0,5 velocidade · +15 pp confiabilidade', speed: 0.5, rel: 15 },
   economico: { name: 'Econômico', effect: '−30% consumo · ×0,8 velocidade', speed: 0.8, kw: 0.7 },
-  filtrar: { name: 'Filtrar entrada suja', effect: 'Anula a sujeira do bioma', lockedUntil: 'M5' },
+  filtrar: { name: 'Filtrar entrada suja', effect: 'Anula a sujeira do bioma · ×0,85 velocidade', speed: 0.85, filtersBiome: true },
 };
 
 /** Custo de contexto: cada cartão encaixado deixa o agente 5% mais lento. */
@@ -62,6 +65,7 @@ export const BASE_RELIABILITY: Record<string, number> = {
   fundidor: 90,
   prensa: 90,
   construtor: 90,
+  verificador: 90,
 };
 
 export interface Design {
@@ -74,6 +78,8 @@ export interface Design {
   /** Nº da versão dentro do papel (v1 = fábrica). */
   version: number;
   factory: boolean;
+  /** Perda por drift ainda não recalibrada (pp). */
+  drift?: number;
 }
 
 export interface DesignStats {
@@ -84,8 +90,12 @@ export interface DesignStats {
   /** Multiplicador do consumo de energia. */
   kwMult: number;
   slots: number;
-  /** Itens por minuto com energia plena e ingredientes à vontade. */
+  /** Itens por minuto com energia plena e ingredientes à vontade (Verificador: inspeções/min). */
   perMin: number;
+  /** Ignora a sujeira do bioma (cartão Filtrar). */
+  filtersBiome: boolean;
+  /** Verificador: chance de rejeitar um item bom. */
+  falsePositive: number;
 }
 
 export const factoryId = (role: AgentType) => `f-${role}`;
@@ -99,16 +109,20 @@ export function designStats(d: Pick<Design, 'role' | 'core' | 'cards'>): DesignS
   let speed = core.speed;
   let rel = BASE_RELIABILITY[d.role] + core.rel;
   let kw = core.kw;
+  let filtersBiome = false;
   for (const c of d.cards) {
     const card = CARDS[c];
     if (card.lockedUntil) continue;
     speed *= card.speed ?? 1;
     rel += card.rel ?? 0;
     kw *= card.kw ?? 1;
+    if (card.filtersBiome) filtersBiome = true;
   }
   speed *= Math.pow(CARD_CONTEXT_COST, d.cards.length);
   const base = BASE_RELIABILITY[d.role];
   rel = Math.max(5, Math.min(rel, Math.max(base, 99)));
-  const r = AGENT_DEFS[d.role].recipe!;
-  return { speed, reliability: rel, kwMult: kw, slots: core.slots, perMin: ((r.output.n * 60) / r.cycle) * speed };
+  const r = AGENT_DEFS[d.role].recipe;
+  const perMin = (r ? (r.output.n * 60) / r.cycle : VERIFIER.ratePerMin) * speed;
+  const falsePositive = d.cards.includes('cuidadoso') ? VERIFIER.falsePositiveCareful : VERIFIER.falsePositive;
+  return { speed, reliability: rel, kwMult: kw, slots: core.slots, perMin, filtersBiome, falsePositive };
 }

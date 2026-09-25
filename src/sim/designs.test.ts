@@ -6,7 +6,7 @@ import { GameMap } from './map';
 import { MAP_ROWS } from './mapData';
 import { Rng } from './rng';
 import { deserialize, serialize } from './save';
-import { openMap } from './testMaps';
+import { openMap, testWorld } from './testMaps';
 import type { AgentType, ResourceId } from './types';
 import { World } from './world';
 
@@ -61,7 +61,7 @@ describe('alucinações', () => {
   };
 
   it('confiabilidade estatística: ~80% em 1.000 itens do Analista', () => {
-    const w = new World(openMap(30, 10));
+    const w = testWorld(openMap(30, 10));
     for (let i = 0; i < 4; i++) w.place('painel_solar', 20, 1 + i * 2);
     const a = w.place('analista', 4, 4);
     if (!a.ok) throw new Error();
@@ -73,7 +73,7 @@ describe('alucinações', () => {
   });
 
   it('ingredientes todos defeituosos: tudo sai defeituoso, contado como herdado', () => {
-    const w = new World(openMap(30, 10));
+    const w = testWorld(openMap(30, 10));
     const e = w.place('eletrolisador', 4, 4);
     if (!e.ok) throw new Error();
     const m = e.agent;
@@ -87,7 +87,7 @@ describe('alucinações', () => {
   });
 
   it('defeitos suavizados: 1 ingrediente ruim em 4 → ~(3/4)² × confiabilidade', () => {
-    const w = new World(openMap(30, 10));
+    const w = testWorld(openMap(30, 10));
     for (let i = 0; i < 4; i++) w.place('painel_solar', 20, 1 + i * 2);
     const e = w.place('eletrolisador', 4, 4);
     if (!e.ok) throw new Error();
@@ -111,7 +111,7 @@ describe('alucinações', () => {
   });
 
   it('Silo separa itens bons e defeituosos', () => {
-    const w = new World(openMap(30, 10));
+    const w = testWorld(openMap(30, 10));
     const s = w.place('silo', 4, 4);
     if (!s.ok) throw new Error();
     s.agent.buffer.push({ res: 'modulo', bad: false }, { res: 'modulo', bad: true }, { res: 'modulo', bad: false });
@@ -120,7 +120,7 @@ describe('alucinações', () => {
   });
 
   it('itens defeituosos viajam pela linha marcados', () => {
-    const w = new World(openMap(30, 10));
+    const w = testWorld(openMap(30, 10));
     const a = w.place('analista', 2, 4);
     const s = w.place('silo', 8, 4);
     if (!a.ok || !s.ok) throw new Error();
@@ -157,7 +157,7 @@ describe('bancada de testes', () => {
 
 describe('versões', () => {
   it('construir usa a versão ativa; aplicar a todos troca só os da versão antiga', () => {
-    const w = new World(openMap(40, 10));
+    const w = testWorld(openMap(40, 10));
     const a1 = w.place('analista', 2, 2);
     const a2 = w.place('analista', 6, 2);
     if (!a1.ok || !a2.ok) throw new Error();
@@ -176,7 +176,7 @@ describe('versões', () => {
   });
 
   it('place com designId define o papel e o consumo segue os módulos', () => {
-    const w = new World(openMap(40, 10));
+    const w = testWorld(openMap(40, 10));
     const d = custom('cartografo', { core: 'avancado', cards: ['economico'] });
     w.addDesign(d);
     const r = w.place('silo', 2, 2, d.id); // o tipo vem da versão
@@ -188,7 +188,7 @@ describe('versões', () => {
 
   it('save v4 guarda versões criadas e a ativa; save v3 vira fábrica', () => {
     const map = GameMap.fromAscii(MAP_ROWS);
-    const w = new World(map);
+    const w = testWorld(map);
     const d = custom('derretedor', { cards: ['acelerar'] });
     w.addDesign(d);
     w.setActive(d.id);

@@ -64,6 +64,8 @@ export const AGENT_DEFS: Record<AgentType, AgentDef> = {
   divisor: { name: 'Divisor', category: 'logistica', maxIn: 1, maxOut: 3, capacity: 2, kw: 0 },
   unificador: { name: 'Unificador', category: 'logistica', maxIn: 3, maxOut: 1, capacity: 2, kw: 0 },
   descarte: { name: 'Descarte', category: 'logistica', maxIn: 3, maxOut: 0, capacity: 0, kw: 0 },
+  plataforma: { name: 'Plataforma de Carga', category: 'logistica', maxIn: 4, maxOut: 0, capacity: 0, kw: 0 },
+  verificador: { name: 'Verificador', category: 'processamento', maxIn: 1, maxOut: 2, capacity: 4, kw: 6 },
 
   painel_solar: { name: 'Painel Solar', category: 'energia', maxIn: 0, maxOut: 0, capacity: 0, kw: 0, generates: 20 },
 };
@@ -87,8 +89,8 @@ export const INPUT_CYCLES = 2;
 
 export const CATEGORIES: { id: Category; name: string; types: AgentType[] }[] = [
   { id: 'extracao', name: 'Extração', types: ['extrator', 'sensor'] },
-  { id: 'processamento', name: 'Processamento', types: ['derretedor', 'cartografo', 'analista', 'eletrolisador', 'fundidor', 'prensa', 'construtor'] },
-  { id: 'logistica', name: 'Logística', types: ['silo', 'divisor', 'unificador', 'descarte'] },
+  { id: 'processamento', name: 'Processamento', types: ['derretedor', 'cartografo', 'analista', 'eletrolisador', 'fundidor', 'prensa', 'construtor', 'verificador'] },
+  { id: 'logistica', name: 'Logística', types: ['silo', 'divisor', 'unificador', 'descarte', 'plataforma'] },
   { id: 'energia', name: 'Energia', types: ['painel_solar'] },
 ];
 
@@ -103,12 +105,38 @@ export const LINK = {
   gap: 0.5,
 };
 
+/** Agentes que exigem o Tier 1 (os demais estão liberados desde o início). */
+export const TIER1_TYPES: AgentType[] = ['analista', 'eletrolisador', 'fundidor', 'prensa', 'construtor'];
+/** Recursos cujo nó só pode ser extraído no Tier 1. */
+export const TIER1_NODES: ResourceId[] = ['minerio'];
+
+/** Metas da Arca, em ordem. A Fase 0 libera o Tier 1. */
+export const ARCA_PHASES: { res: ResourceId; n: number; title: string }[] = [
+  { res: 'mapa', n: 20, title: 'Mapas de pouso' },
+  { res: 'modulo', n: 50, title: 'Módulos de habitat' },
+];
+
+/** Sujeira por terreno (pp de confiabilidade perdidos por agentes de IA ali). */
+export const BIOME_PENALTY: Record<string, number> = { planicie: 0, serra: 5, cratera: 10 };
+export const BIOME_NAME: Record<string, string> = { planicie: 'Planície de Pouso', serra: 'Cordilheira Ferrosa', cratera: 'Crateras Polares' };
+
+/** Verificador: itens inspecionados por minuto (× velocidade) e falsos positivos. */
+export const VERIFIER = { ratePerMin: 30, falsePositive: 0.02, falsePositiveCareful: 0.01 };
+
+/** Experiência: +1 pp a cada XP_PER_PP itens processados, até XP_MAX pp. */
+export const XP_PER_PP = 500;
+export const XP_MAX = 10;
+
+/** Perda de confiabilidade das versões existentes quando o Tier 1 é liberado. */
+export const DRIFT_PP = 5;
+
 /** Tempo bloqueado (s) a partir do qual o agente fica vermelho. */
 export const STALL_ALERT = 5;
 
 /** Texto curto da receita, ex.: "3 Água + 1 Modelo químico → 3 O₂ (6 s)". */
 export function recipeText(type: AgentType, resource: ResourceId | null = null): string {
   const r = AGENT_DEFS[type].recipe;
+  if (type === 'verificador') return `Inspeciona ${VERIFIER.ratePerMin} itens/min: aprovados → 1ª saída, rejeitados → 2ª`;
   if (!r) return '';
   const ins = Object.entries(r.inputs).map(([k, n]) => `${n} ${RESOURCES[k as ResourceId].name}`);
   const outRes = r.output.res ?? resource;

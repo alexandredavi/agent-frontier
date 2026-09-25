@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { Speed } from '../sim/clock';
-import { AGENT_DEFS, CAPSULE_KW, CATEGORIES, RESOURCES, RESOURCE_ORDER } from '../sim/defs';
+import { AGENT_DEFS, ARCA_PHASES, CAPSULE_KW, CATEGORIES, DRIFT_PP, RESOURCES, RESOURCE_ORDER } from '../sim/defs';
 import { isMachine } from '../sim/designs';
 import type { AgentType, ResourceId } from '../sim/types';
 import { drawAgentIcon, drawItem } from './icons';
@@ -14,6 +14,7 @@ const SLOTS = 9;
 const TAB_H = 26;
 const STOCK_W = 250;
 const ROW_H = 22;
+const ARCA_H = 104;
 
 interface Button {
   bg: Phaser.GameObjects.Rectangle;
@@ -30,6 +31,13 @@ export class UIScene extends Phaser.Scene {
   private powerText!: Phaser.GameObjects.Text;
   private footerText!: Phaser.GameObjects.Text;
   private stockGroup!: Phaser.GameObjects.Container;
+
+  // Arca
+  private arcaGroup!: Phaser.GameObjects.Container;
+  private arcaTitle!: Phaser.GameObjects.Text;
+  private arcaGoal!: Phaser.GameObjects.Text;
+  private arcaBar!: Phaser.GameObjects.Rectangle;
+  private arcaInfo!: Phaser.GameObjects.Text;
 
   // Barra
   private hotbar!: Phaser.GameObjects.Container;
@@ -52,6 +60,7 @@ export class UIScene extends Phaser.Scene {
 
   create(): void {
     this.buildStock();
+    this.buildArca();
     this.buildHotbar();
     this.buildTopRight();
 
@@ -75,6 +84,7 @@ export class UIScene extends Phaser.Scene {
     this.state.events.on('toast', this.showToast, this);
     this.state.events.on('saved', this.flashSaved, this);
 
+    // Numa tecla de número bloqueada, avisa em vez de escolher
     const kb = this.input.keyboard!;
     kb.on('keydown-O', () => this.state.events.emit('workshop-toggle'));
     kb.addCapture('TAB');
@@ -86,7 +96,9 @@ export class UIScene extends Phaser.Scene {
     numKeys.forEach((k, i) =>
       kb.on(`keydown-${k}`, () => {
         const type = CATEGORIES[this.state.tab].types[i];
-        if (type) this.state.toggleBuild(type);
+        if (!type) return;
+        if (!this.state.world.isUnlocked(type)) this.state.toast(`${AGENT_DEFS[type].name}: liberado no Tier 1`);
+        else this.state.toggleBuild(type);
       }),
     );
 
@@ -117,6 +129,8 @@ export class UIScene extends Phaser.Scene {
     this.powerText
       .setText(`Energia ${Math.round(p.demand)} / ${p.supply} kW${short ? ` · ${Math.round(p.factor * 100)}%` : ''}`)
       .setColor(short ? UI.badText : UI.text);
+    this.updateArca();
+    this.drainEvents();
     const t = Math.floor(w.time);
     this.footerText.setText(`Agentes: ${w.agents.size} · Cápsula: ${CAPSULE_KW} kW\nTempo de jogo ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
   }
@@ -159,6 +173,48 @@ export class UIScene extends Phaser.Scene {
     this.layout();
   }
 
+  // ---------- Arca ----------
+
+  private buildArca(): void {
+    const bg = this.panel(0, 0, STOCK_W, ARCA_H);
+    this.arcaTitle = this.add.text(14, 10, '', { fontFamily: FONT, fontSize: '11px', color: '#fb923c', fontStyle: 'bold' });
+    this.arcaGoal = this.add.text(14, 30, '', { fontFamily: FONT, fontSize: '13px', color: UI.text });
+    const track = this.add.rectangle(14, 52, STOCK_W - 28, 6, 0x0f131a).setOrigin(0);
+    this.arcaBar = this.add.rectangle(14, 52, 0, 6, 0xfb923c).setOrigin(0);
+    this.arcaInfo = this.add.text(14, 66, '', { fontFamily: FONT, fontSize: '11px', color: UI.muted, lineSpacing: 3 });
+    this.arcaGroup = this.add.container(16, 0, [bg, this.arcaTitle, this.arcaGoal, track, this.arcaBar, this.arcaInfo]);
+  }
+
+  private updateArca(): void {
+    const a = this.state.world.arca;
+    if (a.done) {
+      this.arcaTitle.setText('ARCA · CONCLUÍDO');
+      this.arcaGoal.setText('A Arca pode pousar em Kora-4');
+      this.arcaBar.width = STOCK_W - 28;
+      this.arcaInfo.setText('Continue expandindo a colônia');
+      return;
+    }
+    const ph = ARCA_PHASES[a.phase];
+    this.arcaTitle.setText(`ARCA · FASE ${a.phase + 1} DE ${ARCA_PHASES.length}`);
+    this.arcaGoal.setText(`${ph.title}: ${a.delivered} / ${ph.n}`);
+    this.arcaBar.width = ((STOCK_W - 28) * Math.min(a.delivered, ph.n)) / ph.n;
+    const reward = a.phase === 0 ? 'Libera: Tier 1' : 'Conclui o protótipo';
+    this.arcaInfo.setText(`${reward} · Rejeitados pela Arca: ${a.rejected}\nEntregue numa Plataforma de Carga (Logística)`);
+  }
+
+  private drainEvents(): void {
+    const w = this.state.world;
+    while (w.events.length) {
+      const e = w.events.shift();
+      if (e === 'tier1') {
+        this.state.toast(`Tier 1 liberado! A atmosfera mudou: versões existentes perderam ${DRIFT_PP} pp (drift) — recalibre na Oficina`);
+        this.renderSlots();
+        this.state.events.emit('designs-changed');
+      }
+      if (e === 'vitoria') this.state.events.emit('victory');
+    }
+  }
+
   // ---------- barra com abas ----------
 
   private buildHotbar(): void {
@@ -193,7 +249,15 @@ export class UIScene extends Phaser.Scene {
       this.slotFrames.push(frame);
       this.slotLayer.add(frame);
       this.slotLayer.add(this.add.text(x + 5, 14, String(i + 1), { fontFamily: FONT, fontSize: '10px', color: UI.muted }));
-      if (type) {
+      const locked = type ? !this.state.world.isUnlocked(type) : false;
+      if (type && locked) {
+        const g = this.add.graphics();
+        drawAgentIcon(g, type, x + SLOT / 2, 12 + SLOT / 2 - 5, 11, 0x4b5563);
+        const lock = this.add.text(x + SLOT / 2, 12 + SLOT - 5, '🔒 Tier 1', { fontFamily: FONT, fontSize: '9px', color: UI.muted }).setOrigin(0.5, 1);
+        this.slotLayer.add([g, lock]);
+        frame.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.state.toast(`${AGENT_DEFS[type].name}: liberado no Tier 1 (entregue 20 Mapas de pouso à Arca)`));
+        frame.setAlpha(0.7);
+      } else if (type) {
         const g = this.add.graphics();
         drawAgentIcon(g, type, x + SLOT / 2, 12 + SLOT / 2 - 5, 11, AGENT_COLOR[type]);
         const w = this.state.world;
@@ -286,7 +350,7 @@ export class UIScene extends Phaser.Scene {
   private showToast(message: string): void {
     this.toastTween?.stop();
     this.toastText.setText(message).setAlpha(1);
-    this.toastTween = this.tweens.add({ targets: this.toastText, alpha: 0, delay: 1600, duration: 400 });
+    this.toastTween = this.tweens.add({ targets: this.toastText, alpha: 0, delay: 1600 + message.length * 30, duration: 400 });
   }
 
   private flashSaved(): void {
@@ -308,13 +372,16 @@ export class UIScene extends Phaser.Scene {
     const sx = this.stockGroup.x;
     const sy = this.stockGroup.y;
     const sh = this.stockPanel.displayHeight;
-    this.help.setPosition(sx + 2, sy + sh + 12);
+    this.arcaGroup.setPosition(sx, sy + sh + 8);
+    const arcaBottom = this.arcaGroup.y + ARCA_H;
+    this.help.setPosition(sx + 2, arcaBottom + 12);
     this.help.setVisible(this.help.y + this.help.height < this.hotbar.y - 8 || this.hotbar.x > this.help.x + this.help.width + 16);
 
     this.state.uiRects = [
       new Phaser.Geom.Rectangle(this.hotbar.x, this.hotbar.y, hbW, hbH),
       new Phaser.Geom.Rectangle(this.speedGroup.x, this.speedGroup.y, this.speedGroup.width, 48),
       new Phaser.Geom.Rectangle(sx, sy, STOCK_W, sh),
+      new Phaser.Geom.Rectangle(sx, this.arcaGroup.y, STOCK_W, ARCA_H),
     ];
   }
 }

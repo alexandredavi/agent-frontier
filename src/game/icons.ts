@@ -152,6 +152,24 @@ export function drawAgentIcon(g: Phaser.GameObjects.Graphics, type: AgentType, c
       g.lineBetween(cx + r * 0.3, cy - r * 0.2, cx - r * 0.3, cy + r * 0.5);
       break;
     }
+    case 'verificador': {
+      // Escudo com visto (o juiz)
+      g.fillStyle(color, 1);
+      g.fillPoints([{ x: cx - r * 0.8, y: cy - r * 0.8 }, { x: cx + r * 0.8, y: cy - r * 0.8 }, { x: cx + r * 0.8, y: cy }, { x: cx, y: cy + r }, { x: cx - r * 0.8, y: cy }], true);
+      g.lineStyle(lw * 1.6, DARK, 1);
+      g.lineBetween(cx - r * 0.4, cy - r * 0.1, cx - r * 0.1, cy + r * 0.25);
+      g.lineBetween(cx - r * 0.1, cy + r * 0.25, cx + r * 0.45, cy - r * 0.4);
+      break;
+    }
+    case 'plataforma': {
+      // Plataforma com seta para cima (envio à Arca)
+      g.lineStyle(lw * 1.2, color, 1);
+      g.strokeEllipse(cx, cy + r * 0.6, r * 1.9, r * 0.6);
+      g.fillStyle(color, 1);
+      g.fillTriangle(cx, cy - r, cx - r * 0.5, cy - r * 0.35, cx + r * 0.5, cy - r * 0.35);
+      g.fillRect(cx - r * 0.18, cy - r * 0.4, r * 0.36, r * 0.9);
+      break;
+    }
     case 'painel_solar': {
       // Grade de células solares
       g.fillStyle(color, 1);

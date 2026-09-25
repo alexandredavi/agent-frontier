@@ -50,6 +50,8 @@ export const AGENT_COLOR: Record<AgentType, number> = {
   divisor: CATEGORY_COLOR.logistica,
   unificador: CATEGORY_COLOR.logistica,
   descarte: 0xf87171,
+  verificador: 0x86efac,
+  plataforma: 0xfb923c,
   painel_solar: CATEGORY_COLOR.energia,
 };
 

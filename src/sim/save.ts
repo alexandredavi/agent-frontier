@@ -1,15 +1,20 @@
 import { AGENT_DEFS, INPUT_CYCLES, LINK, RESOURCES } from './defs';
 import { CARDS, CORES, type CardId, type CoreId, type Design, TOOLS, type ToolId, isMachine } from './designs';
 import type { GameMap } from './map';
-import type { AgentType, Item, ResourceId } from './types';
+import { ARCA_PHASES } from './defs';
+import type { AgentType, ArcaState, Item, ResourceId } from './types';
 import { World } from './world';
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export interface SaveData {
   version: typeof SAVE_VERSION;
   time: number;
   rng: number;
+  tier: number;
+  arca: ArcaState;
+  /** Drift pendente por versão (inclui as de fábrica, que não são salvas em `designs`). */
+  drift: Record<string, number>;
   designs: Design[];
   active: Partial<Record<AgentType, string>>;
   agents: {
@@ -27,6 +32,11 @@ export interface SaveData {
     inputs: Partial<Record<ResourceId, number>>;
     badInputs: Partial<Record<ResourceId, number>>;
     buffer: Item[];
+    queue: Item[];
+    rejects: Item[];
+    caught: number;
+    falsePos: number;
+    missed: number;
   }[];
   connections: { from: number; to: number; items: { res: ResourceId; bad: boolean; pos: number }[] }[];
 }
@@ -36,6 +46,9 @@ export function serialize(world: World): SaveData {
     version: SAVE_VERSION,
     time: world.time,
     rng: world.rng.state,
+    tier: world.tier,
+    arca: { ...world.arca },
+    drift: Object.fromEntries([...world.designs.values()].filter((d) => d.drift).map((d) => [d.id, d.drift!])),
     designs: [...world.designs.values()].filter((d) => !d.factory).map((d) => ({ ...d, cards: [...d.cards] })),
     active: { ...world.activeDesign },
     agents: [...world.agents.values()].map((a) => ({
@@ -53,6 +66,11 @@ export function serialize(world: World): SaveData {
       inputs: { ...a.inputs },
       badInputs: { ...a.badInputs },
       buffer: a.buffer.map((i) => ({ ...i })),
+      queue: a.queue.map((i) => ({ ...i })),
+      rejects: a.rejects.map((i) => ({ ...i })),
+      caught: a.caught,
+      falsePos: a.falsePos,
+      missed: a.missed,
     })),
     connections: [...world.connections.values()].map(({ from, to, items }) => ({ from, to, items: items.map((i) => ({ ...i })) })),
   };
@@ -93,17 +111,30 @@ function readDesign(raw: Record<string, unknown>): Design | null {
  */
 export function deserialize(data: unknown, map: GameMap): World {
   const d = data as Record<string, unknown> | null;
-  if (!d || typeof d !== 'object' || !Array.isArray(d.agents) || ![1, 2, 3, 4].includes(d.version as number)) {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.agents) || ![1, 2, 3, 4, 5].includes(d.version as number)) {
     throw new Error('Save inválido ou de outra versão');
   }
   const world = new World(map);
   world.time = num(d.time);
   if (typeof d.rng === 'number') world.rng.state = d.rng | 0;
+  // Saves de antes do M5 já tinham agentes de Tier 1: começam com o Tier 1 liberado e sem drift.
+  world.tier = d.version === 5 ? Math.max(0, Math.min(1, num(d.tier))) : 1;
+  const arca = d.arca as Partial<ArcaState> | undefined;
+  if (d.version === 5 && arca && typeof arca === 'object') {
+    const phase = Math.max(0, Math.min(ARCA_PHASES.length - 1, Math.floor(num(arca.phase))));
+    world.arca = { phase, delivered: Math.max(0, Math.floor(num(arca.delivered))), rejected: Math.max(0, Math.floor(num(arca.rejected))), done: arca.done === true };
+  }
 
   if (Array.isArray(d.designs)) {
     for (const raw of d.designs as Record<string, unknown>[]) {
       const design = readDesign(raw);
       if (design) world.addDesign(design);
+    }
+  }
+  if (d.drift && typeof d.drift === 'object') {
+    for (const [id, v] of Object.entries(d.drift as Record<string, unknown>)) {
+      const design = world.designs.get(id);
+      if (design) design.drift = Math.max(0, num(v));
     }
   }
   if (d.active && typeof d.active === 'object') {
@@ -128,7 +159,15 @@ export function deserialize(data: unknown, map: GameMap): World {
     // Saves antigos do M4 marcavam o ciclo como "contaminado" (perdido); vira qualidade 0,5
     a.quality = a.running ? Math.min(1, Math.max(0, num(raw.quality, raw.contaminated === true ? 0.5 : 1))) : 1;
     if (!a.running && Object.keys(def.recipe?.inputs ?? {}).length > 0) a.progress = 0;
-    if (Array.isArray(raw.buffer)) a.buffer = raw.buffer.map(toItem).filter((i): i is Item => !!i).slice(0, def.capacity);
+    const items = (v: unknown, max: number) => (Array.isArray(v) ? v.map(toItem).filter((i): i is Item => !!i).slice(0, max) : []);
+    if (Array.isArray(raw.buffer)) a.buffer = items(raw.buffer, def.capacity);
+    if (a.type === 'verificador') {
+      a.queue = items(raw.queue, 2);
+      a.rejects = items(raw.rejects, def.capacity);
+      a.caught = num(raw.caught);
+      a.falsePos = num(raw.falsePos);
+      a.missed = num(raw.missed);
+    }
     if (def.recipe) {
       for (const [field, target] of [['inputs', a.inputs], ['badInputs', a.badInputs]] as const) {
         const src = raw[field];

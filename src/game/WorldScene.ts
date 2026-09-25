@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { AGENT_DEFS, AGENT_SIZE, INPUT_CYCLES, LINK, RESOURCES, STALL_ALERT, agentKw, outputPerMin, recipeText } from '../sim/defs';
+import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, INPUT_CYCLES, LINK, RESOURCES, STALL_ALERT, agentKw, outputPerMin, recipeText } from '../sim/defs';
 import { LANDING_POINT } from '../sim/mapData';
 import type { Agent } from '../sim/types';
 import { CONNECT_ERROR_TEXT, PLACE_ERROR_TEXT, agentCenter } from '../sim/world';
@@ -353,7 +353,10 @@ export class WorldScene extends Phaser.Scene {
       const st = activeId ? world.stats(activeId) : null;
       const kw = (check.ok ? agentKw(tool.type, check.resource) : def.kw) * (st?.kwMult ?? 1);
       const parts = [activeId ? world.designs.get(activeId)!.name : def.name];
-      if (st && st.reliability < 100) parts.push(`${Math.round(st.reliability)}%`);
+      if (st && check.ok) {
+        const real = Math.max(5, Math.min(Math.max(st.reliability, 99), st.reliability - (st.filtersBiome ? 0 : world.biomeAt(x, y)) - (world.designs.get(activeId!)!.drift ?? 0)));
+        if (real < 100) parts.push(`${Math.round(real)}% aqui`);
+      }
       if (def.recipe) parts.push(recipeText(tool.type, check.ok ? check.resource : null));
       if (kw) parts.push(`${Math.round(kw * 10) / 10} kW`);
       if (def.generates) parts.push(`+${def.generates} kW`);
@@ -386,13 +389,29 @@ export class WorldScene extends Phaser.Scene {
       lines.push(`Saída: ${perMin}/min · Produzido: ${a.produced}`);
       if (design) {
         const st = w.stats(design.id);
-        lines.push(`Confiabilidade: ${Math.round(st.reliability)}% · Velocidade ×${st.speed.toFixed(2)}`);
+        lines.push(this.reliabilityLine(a));
+        lines.push(`Velocidade ×${st.speed.toFixed(2)}`);
         lines.push(`Alucinações: ${a.defects} · Defeitos herdados: ${a.inherited}`);
       }
       if (a.running) lines.push(`Ciclo: ${Math.floor(a.progress * 100)}%${a.quality < 1 ? ` · qualidade herdada ${Math.round(a.quality * 100)}%` : ''}`);
       const ins = Object.entries(def.recipe.inputs);
       if (ins.length) lines.push('Ingredientes: ' + ins.map(([r, n]) => `${RESOURCES[r as keyof typeof RESOURCES].name} ${a.inputs[r as keyof typeof a.inputs] ?? 0}/${n! * INPUT_CYCLES}`).join(' · '));
       lines.push(`Consumo: ${Math.round(w.agentPower(a) * 10) / 10} kW (só trabalhando)`);
+    }
+    if (a.type === 'verificador' && design) {
+      const st = w.stats(design.id);
+      lines.push(`Inspeciona ${Math.round(st.perMin * 10) / 10} itens/min · ${Math.round(w.agentPower(a) * 10) / 10} kW`);
+      lines.push(this.reliabilityLine(a, 'Detecção'));
+      lines.push(`Falso positivo: ${Math.round(st.falsePositive * 100)}% dos itens bons`);
+      lines.push(`Inspecionados: ${a.produced} · Defeituosos pegos: ${a.caught}`);
+      lines.push(`Bons rejeitados: ${a.falsePos} · Defeituosos que passaram: ${a.missed}`);
+      const outs = w.outputsOf(a.id).length;
+      lines.push(outs >= 2 ? '1ª saída: aprovados · 2ª: rejeitados' : outs === 1 ? '1ª saída: aprovados · sem 2ª saída: rejeitados são destruídos' : 'Ligue a 1ª saída (aprovados) e a 2ª (rejeitados)');
+    }
+    if (a.type === 'plataforma') {
+      const ph = ARCA_PHASES[w.arca.phase];
+      lines.push(w.arca.done ? 'Arca: todas as fases concluídas' : `Enviando para a Arca: ${ph.title} ${w.arca.delivered}/${ph.n}`);
+      lines.push(`Recebidos aqui: ${a.produced} · Rejeitados pela Arca (total da fase): ${w.arca.rejected}`);
     }
     if (def.generates) lines.push(`Gera ${def.generates} kW`);
     if (a.type === 'descarte') lines.push(`Destruídos: ${a.produced}`);
@@ -401,6 +420,18 @@ export class WorldScene extends Phaser.Scene {
     if (def.maxOut > 0) lines.push(`Saídas: ${w.outputsOf(a.id).length}/${def.maxOut}`);
     lines.push(def.maxIn + def.maxOut > 0 ? 'Arraste para conectar · X: demolir' : 'X: demolir');
     return lines.join('\n');
+  }
+
+  /** "Bancada 90% → Real 82% (bioma −10, drift −5, experiência +7)". */
+  private reliabilityLine(a: Agent, label = 'Confiabilidade'): string {
+    const r = this.state.world.reliabilityBreakdown(a);
+    const parts: string[] = [];
+    if (r.biome) parts.push(`bioma −${r.biome}`);
+    if (r.drift) parts.push(`drift −${r.drift}`);
+    if (r.xp) parts.push(`experiência +${r.xp}`);
+    const real = Math.round(r.real);
+    const bench = Math.round(r.design);
+    return parts.length ? `${label}: bancada ${bench}% → real ${real}% (${parts.join(', ')})` : `${label}: ${real}%`;
   }
 
   // ---------- entrada ----------
