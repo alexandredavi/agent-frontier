@@ -1,29 +1,39 @@
 import Phaser from 'phaser';
-import { AGENT_DEFS, AGENT_SIZE } from '../sim/defs';
+import { AGENT_DEFS, AGENT_SIZE, LINK, RESOURCES, STALL_ALERT } from '../sim/defs';
 import { LANDING_POINT } from '../sim/mapData';
 import type { Agent } from '../sim/types';
-import { PLACE_ERROR_TEXT } from '../sim/world';
+import { CONNECT_ERROR_TEXT, PLACE_ERROR_TEXT, agentCenter } from '../sim/world';
 import { drawAgentIcon } from './icons';
 import { writeSave } from './persistence';
 import type { GameState } from './state';
-import { AGENT_COLOR, FONT, RESOURCE_COLOR, TERRAIN_COLOR, TILE, UI } from './theme';
+import { AGENT_COLOR, FONT, LINK_COLOR, RESOURCE_COLOR, TERRAIN_COLOR, TILE, UI, WARN } from './theme';
 
 interface AgentView {
   container: Phaser.GameObjects.Container;
   label: Phaser.GameObjects.Text;
-  lastProduced: number;
+  ring: Phaser.GameObjects.Graphics;
+  labelKey: string;
+  ringKey: string;
 }
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.5;
 const AUTOSAVE_MS = 10_000;
 
+const STATUS_TEXT: Record<Agent['status'], string> = {
+  ok: 'Funcionando',
+  bloqueado: 'Bloqueado — saída travada ou cheio',
+  ocioso: 'Ocioso — sem itens chegando',
+};
+
 export class WorldScene extends Phaser.Scene {
   private views = new Map<number, AgentView>();
+  private links!: Phaser.GameObjects.Graphics;
   private ghost!: Phaser.GameObjects.Graphics;
-  private ghostText!: Phaser.GameObjects.Text;
-  private hoverCell: { x: number; y: number } | null = null;
-  private dragging = false;
+  private tip!: Phaser.GameObjects.Text;
+  private info!: Phaser.GameObjects.Text;
+  private dragFrom: number | null = null;
+  private panning = false;
   private sinceSave = 0;
   private lastNow = performance.now();
 
@@ -35,10 +45,13 @@ export class WorldScene extends Phaser.Scene {
     const { map } = this.state.world;
     this.drawMap();
 
+    this.links = this.add.graphics().setDepth(5);
     this.ghost = this.add.graphics().setDepth(20);
-    this.ghostText = this.add
-      .text(0, 0, '', { fontFamily: FONT, fontSize: '12px', color: '#ffffff', backgroundColor: '#000000aa', padding: { x: 6, y: 3 } })
-      .setDepth(21)
+    const tipStyle = { fontFamily: FONT, fontSize: '12px', color: '#ffffff', backgroundColor: '#000000bb', padding: { x: 6, y: 3 } };
+    this.tip = this.add.text(0, 0, '', tipStyle).setDepth(22).setVisible(false);
+    this.info = this.add
+      .text(0, 0, '', { ...tipStyle, backgroundColor: '#141821ee', lineSpacing: 3, padding: { x: 8, y: 6 } })
+      .setDepth(22)
       .setVisible(false);
 
     const cam = this.cameras.main;
@@ -50,7 +63,6 @@ export class WorldScene extends Phaser.Scene {
     this.setupInput();
 
     this.state.events.on('world-replaced', this.rebuildViews, this);
-    this.state.events.on('tool', () => this.redrawGhost(), this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.state.events.off('world-replaced', this.rebuildViews, this));
 
     const save = () => writeSave(this.state.world);
@@ -58,7 +70,7 @@ export class WorldScene extends Phaser.Scene {
     document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && save());
   }
 
-  update(_time: number, delta: number): void {
+  update(): void {
     const world = this.state.world;
     // Tempo real medido direto (o delta do Phaser é suavizado e pode subestimar quedas de FPS)
     const now = performance.now();
@@ -68,22 +80,19 @@ export class WorldScene extends Phaser.Scene {
 
     for (const [id, view] of this.views) {
       const agent = world.agents.get(id);
-      if (!agent) continue;
-      if (agent.produced !== view.lastProduced) {
-        view.lastProduced = agent.produced;
-        view.label.setText(String(agent.produced));
-        this.popItem(agent);
-      }
+      if (agent) this.refreshView(agent, view);
     }
+    this.drawLinks();
+    this.drawOverlay();
 
-    this.sinceSave += delta;
+    this.sinceSave += realDt * 1000;
     if (this.sinceSave >= AUTOSAVE_MS) {
       this.sinceSave = 0;
       if (writeSave(world)) this.state.events.emit('saved');
     }
   }
 
-  // ---------- desenho do mapa ----------
+  // ---------- mapa ----------
 
   private drawMap(): void {
     const { map } = this.state.world;
@@ -91,13 +100,10 @@ export class WorldScene extends Phaser.Scene {
 
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
-        const tile = map.get(x, y)!;
-        g.fillStyle(TERRAIN_COLOR[tile.terrain], 1);
+        g.fillStyle(TERRAIN_COLOR[map.get(x, y)!.terrain], 1);
         g.fillRect(x * TILE, y * TILE, TILE, TILE);
       }
     }
-
-    // Grade sutil nas áreas construíveis
     g.lineStyle(1, 0xffffff, 0.04);
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
@@ -105,8 +111,6 @@ export class WorldScene extends Phaser.Scene {
         if (t === 'planicie' || t === 'cratera') g.strokeRect(x * TILE + 0.5, y * TILE + 0.5, TILE - 1, TILE - 1);
       }
     }
-
-    // Rochas: pedras simples
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
         if (map.terrainAt(x, y) !== 'rocha') continue;
@@ -116,8 +120,6 @@ export class WorldScene extends Phaser.Scene {
         g.fillCircle(x * TILE + 21, y * TILE + 20, 6);
       }
     }
-
-    // Névoa / sinal fraco: hachura diagonal
     g.lineStyle(1, 0x2a3040, 0.6);
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
@@ -129,8 +131,6 @@ export class WorldScene extends Phaser.Scene {
         g.lineBetween(px + TILE / 2, py + TILE, px + TILE, py + TILE / 2);
       }
     }
-
-    // Nós de recurso: células com cristais/pedaços coloridos
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
         const node = map.nodeAt(x, y);
@@ -145,9 +145,8 @@ export class WorldScene extends Phaser.Scene {
         g.fillCircle(x * TILE + 12, y * TILE + 25 - (seed % 2) * 3, 3);
       }
     }
-
     // "Assa" o mapa numa textura: desenhado uma vez, barato de renderizar a cada quadro
-    g.generateTexture('map', map.width * TILE, map.height * TILE);
+    if (!this.textures.exists('map')) g.generateTexture('map', map.width * TILE, map.height * TILE);
     g.destroy();
     this.add.image(0, 0, 'map').setOrigin(0).setDepth(0);
   }
@@ -172,20 +171,42 @@ export class WorldScene extends Phaser.Scene {
     g.fillRoundedRect(pad, pad, size - pad * 2, size - pad * 2, 8);
     g.lineStyle(2, color, 1);
     g.strokeRoundedRect(pad, pad, size - pad * 2, size - pad * 2, 8);
-    drawAgentIcon(g, agent.type, size / 2, size / 2 - 2, 14, color);
-    // Indicador do recurso extraído
-    g.fillStyle(RESOURCE_COLOR[agent.resource], 1);
-    g.fillCircle(size - 12, 12, 5);
+    drawAgentIcon(g, agent.type, size / 2, size / 2 - 3, 13, color);
+    if (agent.resource) {
+      g.fillStyle(RESOURCE_COLOR[agent.resource], 1);
+      g.fillCircle(size - 12, 12, 5);
+    }
 
-    const label = this.add
-      .text(size / 2, size - 10, String(agent.produced), { fontFamily: FONT, fontSize: '11px', color: '#e8ecf3' })
-      .setOrigin(0.5);
-
-    const container = this.add.container(agent.x * TILE, agent.y * TILE, [g, label]).setDepth(10);
+    const ring = this.add.graphics();
+    const label = this.add.text(size / 2, size - 10, '', { fontFamily: FONT, fontSize: '11px', color: '#e8ecf3' }).setOrigin(0.5);
+    const container = this.add.container(agent.x * TILE, agent.y * TILE, [ring, g, label]).setDepth(10);
     container.setScale(0.6).setAlpha(0);
     this.tweens.add({ targets: container, scale: 1, alpha: 1, duration: 180, ease: 'Back.Out' });
 
-    this.views.set(agent.id, { container, label, lastProduced: agent.produced });
+    const view: AgentView = { container, label, ring, labelKey: '', ringKey: '' };
+    this.views.set(agent.id, view);
+    this.refreshView(agent, view);
+  }
+
+  private refreshView(agent: Agent, view: AgentView): void {
+    let text = '';
+    if (agent.type === 'extrator') text = String(agent.produced);
+    if (agent.type === 'silo') text = `${agent.buffer.length}/${AGENT_DEFS.silo.capacity}`;
+    if (text !== view.labelKey) {
+      view.labelKey = text;
+      view.label.setText(text);
+    }
+
+    const ringKey = agent.status === 'bloqueado' ? (agent.stalledFor >= STALL_ALERT ? 'red' : 'amber') : '';
+    if (ringKey !== view.ringKey) {
+      view.ringKey = ringKey;
+      view.ring.clear();
+      if (ringKey) {
+        const size = AGENT_SIZE * TILE;
+        view.ring.lineStyle(3, ringKey === 'red' ? UI.bad : WARN, 0.95);
+        view.ring.strokeRoundedRect(-1, -1, size + 2, size + 2, 10);
+      }
+    }
   }
 
   private removeView(id: number): void {
@@ -195,11 +216,159 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({ targets: view.container, scale: 0.6, alpha: 0, duration: 140, onComplete: () => view.container.destroy() });
   }
 
-  private popItem(agent: Agent): void {
-    const cx = (agent.x + AGENT_SIZE / 2) * TILE;
-    const cy = agent.y * TILE + 6;
-    const dot = this.add.circle(cx, cy, 4, RESOURCE_COLOR[agent.resource]).setDepth(15);
-    this.tweens.add({ targets: dot, y: cy - 22, alpha: 0, duration: 700, ease: 'Quad.Out', onComplete: () => dot.destroy() });
+  // ---------- conexões ----------
+
+  /** Pontos de início e fim visuais de uma linha (bordas dos agentes), em pixels. */
+  private linkEnds(fromAgent: Agent, toAgent: Agent) {
+    const a = agentCenter(fromAgent);
+    const b = agentCenter(toAgent);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const d = Math.hypot(dx, dy) || 1;
+    // Sai da borda do quadrado 2x2 (distância até a borda na direção da linha)
+    const edge = (AGENT_SIZE / 2) / Math.max(Math.abs(dx / d), Math.abs(dy / d));
+    const inset = Math.min(edge, d / 2);
+    return {
+      sx: (a.x + (dx / d) * inset) * TILE,
+      sy: (a.y + (dy / d) * inset) * TILE,
+      ex: (b.x - (dx / d) * inset) * TILE,
+      ey: (b.y - (dy / d) * inset) * TILE,
+      ux: dx / d,
+      uy: dy / d,
+    };
+  }
+
+  private drawLinks(): void {
+    const g = this.links;
+    const world = this.state.world;
+    g.clear();
+
+    const hovered = this.hoveredConnectionId();
+    for (const c of world.connections.values()) {
+      const from = world.agents.get(c.from)!;
+      const to = world.agents.get(c.to)!;
+      const { sx, sy, ex, ey, ux, uy } = this.linkEnds(from, to);
+      const color = c.id === hovered ? UI.bad : LINK_COLOR;
+      g.lineStyle(6, 0x0b0d12, 0.6);
+      g.lineBetween(sx, sy, ex, ey);
+      g.lineStyle(3, color, 1);
+      g.lineBetween(sx, sy, ex, ey);
+      // Seta de direção no meio
+      const mx = (sx + ex) / 2;
+      const my = (sy + ey) / 2;
+      const s = 6;
+      g.fillStyle(color, 1);
+      g.fillTriangle(mx + ux * s, my + uy * s, mx - ux * s - uy * s, my - uy * s + ux * s, mx - ux * s + uy * s, my - uy * s - ux * s);
+      // Itens
+      for (const item of c.items) {
+        const t = c.length > 0 ? item.pos / c.length : 1;
+        const x = sx + (ex - sx) * t;
+        const y = sy + (ey - sy) * t;
+        g.fillStyle(0x0b0d12, 1);
+        g.fillCircle(x, y, 6);
+        g.fillStyle(RESOURCE_COLOR[item.res], 1);
+        g.fillCircle(x, y, 4.5);
+      }
+    }
+  }
+
+  private hoveredConnectionId(): number | undefined {
+    if (this.state.tool.kind !== 'none' || this.dragFrom !== null) return undefined;
+    const p = this.input.activePointer;
+    if (this.state.isOverUI(p.x, p.y)) return undefined;
+    const wp = this.cameras.main.getWorldPoint(p.x, p.y);
+    if (this.state.world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE))) return undefined;
+    return this.state.world.connectionNear(wp.x / TILE, wp.y / TILE)?.id;
+  }
+
+  // ---------- sobreposições: prévia de construção, arrasto e cartão ----------
+
+  private drawOverlay(): void {
+    const g = this.ghost;
+    g.clear();
+    this.tip.setVisible(false);
+    this.info.setVisible(false);
+
+    const p = this.input.activePointer;
+    const cam = this.cameras.main;
+    const wp = cam.getWorldPoint(p.x, p.y);
+    const zoomFix = 1 / cam.zoom;
+    const world = this.state.world;
+    const overUI = this.state.isOverUI(p.x, p.y);
+    const hoverAgent = world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
+
+    // Arrastando uma conexão
+    if (this.dragFrom !== null) {
+      const from = world.agents.get(this.dragFrom);
+      if (!from) {
+        this.dragFrom = null;
+        return;
+      }
+      const a = agentCenter(from);
+      g.lineStyle(1, 0xffffff, 0.12);
+      g.strokeCircle(a.x * TILE, a.y * TILE, LINK.range * TILE);
+
+      let color = 0xffffff;
+      let text = 'Solte sobre o agente de destino';
+      if (hoverAgent && hoverAgent.id !== from.id) {
+        const check = world.canConnect(from.id, hoverAgent.id);
+        color = check.ok ? UI.ok : UI.bad;
+        text = check.ok ? `Conectar · ${LINK.ratePerMin}/min` : CONNECT_ERROR_TEXT[check.reason];
+        const b = agentCenter(hoverAgent);
+        g.lineStyle(2, color, 0.9);
+        g.strokeRoundedRect(hoverAgent.x * TILE, hoverAgent.y * TILE, AGENT_SIZE * TILE, AGENT_SIZE * TILE, 8);
+        g.lineStyle(3, color, 0.8);
+        g.lineBetween(a.x * TILE, a.y * TILE, b.x * TILE, b.y * TILE);
+      } else {
+        g.lineStyle(3, color, 0.6);
+        g.lineBetween(a.x * TILE, a.y * TILE, wp.x, wp.y);
+      }
+      this.tip.setText(text).setPosition(wp.x + 14 * zoomFix, wp.y + 10 * zoomFix).setScale(zoomFix).setVisible(true);
+      return;
+    }
+
+    if (overUI) return;
+
+    // Prévia de construção
+    const tool = this.state.tool;
+    if (tool.kind === 'build' && !hoverAgent) {
+      const x = Math.round(wp.x / TILE - AGENT_SIZE / 2);
+      const y = Math.round(wp.y / TILE - AGENT_SIZE / 2);
+      const check = world.canPlace(tool.type, x, y);
+      const color = check.ok ? UI.ok : UI.bad;
+      const size = AGENT_SIZE * TILE;
+      g.fillStyle(color, 0.22);
+      g.fillRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
+      g.lineStyle(2, color, 0.9);
+      g.strokeRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
+      const def = AGENT_DEFS[tool.type];
+      const text = check.ok ? (def.ratePerMin ? `${def.name} · ${def.ratePerMin}/min` : def.name) : PLACE_ERROR_TEXT[check.reason];
+      this.tip.setText(text).setPosition(x * TILE + size + 6, y * TILE).setScale(zoomFix).setVisible(true);
+      return;
+    }
+
+    // Cartão de informação do agente
+    if (hoverAgent) {
+      this.info
+        .setText(this.describe(hoverAgent))
+        .setPosition((hoverAgent.x + AGENT_SIZE) * TILE + 6, hoverAgent.y * TILE)
+        .setScale(zoomFix)
+        .setVisible(true);
+    } else if (this.hoveredConnectionId() !== undefined) {
+      this.tip.setText('X: remover conexão').setPosition(wp.x + 14 * zoomFix, wp.y + 10 * zoomFix).setScale(zoomFix).setVisible(true);
+    }
+  }
+
+  private describe(a: Agent): string {
+    const def = AGENT_DEFS[a.type];
+    const w = this.state.world;
+    const lines = [def.name.toUpperCase(), STATUS_TEXT[a.status]];
+    if (a.type === 'extrator' && a.resource) lines.push(`Recurso: ${RESOURCES[a.resource].name} · ${def.ratePerMin}/min`, `Produzido: ${a.produced}`);
+    lines.push(`${a.type === 'silo' ? 'Estoque' : 'Buffer'}: ${a.buffer.length}/${def.capacity}`);
+    if (def.maxIn > 0) lines.push(`Entradas: ${w.inputsOf(a.id).length}/${def.maxIn}`);
+    if (def.maxOut > 0) lines.push(`Saídas: ${w.outputsOf(a.id).length}/${def.maxOut}`);
+    lines.push('Arraste para conectar · X: demolir');
+    return lines.join('\n');
   }
 
   // ---------- entrada ----------
@@ -210,21 +379,39 @@ export class WorldScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
       if (p.rightButtonDown() || p.middleButtonDown()) {
-        this.dragging = true;
+        this.panning = true;
         return;
       }
       if (this.state.isOverUI(p.x, p.y)) return;
-      this.handleClick(p);
+      const wp = cam.getWorldPoint(p.x, p.y);
+      const agent = this.state.world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
+      if (agent) {
+        this.dragFrom = agent.id;
+        return;
+      }
+      this.tryBuild(wp.x, wp.y);
     });
 
-    this.input.on('pointerup', () => (this.dragging = false));
+    this.input.on('pointerup', (p: Phaser.Input.Pointer) => {
+      if (p.button !== 0) {
+        this.panning = false;
+        return;
+      }
+      if (this.dragFrom === null) return;
+      const wp = cam.getWorldPoint(p.x, p.y);
+      const target = this.state.world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
+      const fromId = this.dragFrom;
+      this.dragFrom = null;
+      if (!target || target.id === fromId) return;
+      const res = this.state.world.connect(fromId, target.id);
+      if (!res.ok) this.state.toast(CONNECT_ERROR_TEXT[res.reason]);
+    });
 
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
-      if (this.dragging && (p.rightButtonDown() || p.middleButtonDown())) {
+      if (this.panning && (p.rightButtonDown() || p.middleButtonDown())) {
         cam.scrollX -= (p.x - p.prevPosition.x) / cam.zoom;
         cam.scrollY -= (p.y - p.prevPosition.y) / cam.zoom;
       }
-      this.updateHover(p);
     });
 
     this.input.on('wheel', (p: Phaser.Input.Pointer, _objs: unknown, _dx: number, dy: number) => {
@@ -234,22 +421,27 @@ export class WorldScene extends Phaser.Scene {
       const after = cam.getWorldPoint(p.x, p.y);
       cam.scrollX += before.x - after.x;
       cam.scrollY += before.y - after.y;
-      this.updateHover(p);
     });
 
     const kb = this.input.keyboard!;
     kb.on('keydown-ONE', () => this.state.toggleBuild('extrator'));
-    kb.on('keydown-ESC', () => this.state.setTool({ kind: 'none' }));
-    kb.on('keydown-Q', () => this.state.setTool({ kind: 'none' }));
+    kb.on('keydown-TWO', () => this.state.toggleBuild('silo'));
+    kb.on('keydown-THREE', () => this.state.toggleBuild('divisor'));
+    kb.on('keydown-FOUR', () => this.state.toggleBuild('unificador'));
+    const cancel = () => {
+      this.dragFrom = null;
+      this.state.setTool({ kind: 'none' });
+    };
+    kb.on('keydown-ESC', cancel);
+    kb.on('keydown-Q', cancel);
     kb.on('keydown-X', () => this.demolishHovered());
     kb.on('keydown-DELETE', () => this.demolishHovered());
     kb.on('keydown-SPACE', () => this.state.togglePause());
     kb.on('keydown-P', () => this.state.togglePause());
 
-    // WASD / setas para mover a câmera
     const keys = kb.addKeys('W,A,S,D,UP,LEFT,DOWN,RIGHT') as Record<string, Phaser.Input.Keyboard.Key>;
     this.events.on(Phaser.Scenes.Events.UPDATE, (_t: number, delta: number) => {
-      const v = (delta / 1000) * 600 / cam.zoom;
+      const v = ((delta / 1000) * 600) / cam.zoom;
       if (keys.A.isDown || keys.LEFT.isDown) cam.scrollX -= v;
       if (keys.D.isDown || keys.RIGHT.isDown) cam.scrollX += v;
       if (keys.W.isDown || keys.UP.isDown) cam.scrollY -= v;
@@ -257,71 +449,27 @@ export class WorldScene extends Phaser.Scene {
     });
   }
 
-  /** Célula (canto superior esquerdo do 2x2) sob o ponteiro, centrando o agente no cursor. */
-  private cellUnder(p: Phaser.Input.Pointer): { x: number; y: number; hx: number; hy: number } {
-    const wp = this.cameras.main.getWorldPoint(p.x, p.y);
-    return {
-      x: Math.round(wp.x / TILE - AGENT_SIZE / 2),
-      y: Math.round(wp.y / TILE - AGENT_SIZE / 2),
-      hx: Math.floor(wp.x / TILE),
-      hy: Math.floor(wp.y / TILE),
-    };
-  }
-
-  private updateHover(p: Phaser.Input.Pointer): void {
-    const c = this.cellUnder(p);
-    this.hoverCell = { x: c.x, y: c.y };
-    this.redrawGhost(p);
-  }
-
-  private redrawGhost(p?: Phaser.Input.Pointer): void {
-    this.ghost.clear();
-    this.ghostText.setVisible(false);
-    const tool = this.state.tool;
-    const pointer = p ?? this.input.activePointer;
-    if (tool.kind !== 'build' || !this.hoverCell || this.state.isOverUI(pointer.x, pointer.y)) return;
-
-    const { x, y } = this.hoverCell;
-    const check = this.state.world.canPlace(tool.type, x, y);
-    const color = check.ok ? UI.ok : UI.bad;
-    const size = AGENT_SIZE * TILE;
-    this.ghost.fillStyle(color, 0.22);
-    this.ghost.fillRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
-    this.ghost.lineStyle(2, color, 0.9);
-    this.ghost.strokeRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
-
-    const text = check.ok
-      ? `${AGENT_DEFS[tool.type].name} · ${AGENT_DEFS[tool.type].ratePerMin}/min`
-      : PLACE_ERROR_TEXT[check.reason];
-    this.ghostText
-      .setText(text)
-      .setPosition(x * TILE + size + 6, y * TILE)
-      .setScale(1 / this.cameras.main.zoom)
-      .setVisible(true);
-  }
-
-  private handleClick(p: Phaser.Input.Pointer): void {
+  private tryBuild(wx: number, wy: number): void {
     const tool = this.state.tool;
     if (tool.kind !== 'build') return;
-    const { x, y } = this.cellUnder(p);
+    const x = Math.round(wx / TILE - AGENT_SIZE / 2);
+    const y = Math.round(wy / TILE - AGENT_SIZE / 2);
     const res = this.state.world.place(tool.type, x, y);
-    if (res.ok) {
-      this.addView(res.agent);
-      this.state.events.emit('agent-added', res.agent);
-    } else {
-      this.state.toast(PLACE_ERROR_TEXT[res.reason]);
-    }
-    this.redrawGhost(p);
+    if (res.ok) this.addView(res.agent);
+    else this.state.toast(PLACE_ERROR_TEXT[res.reason]);
   }
 
   private demolishHovered(): void {
     const p = this.input.activePointer;
-    const c = this.cellUnder(p);
-    const agent = this.state.world.agentAt(c.hx, c.hy);
-    if (!agent) return;
-    this.state.world.remove(agent.id);
-    this.removeView(agent.id);
-    this.state.events.emit('agent-removed', agent);
-    this.redrawGhost(p);
+    const wp = this.cameras.main.getWorldPoint(p.x, p.y);
+    const world = this.state.world;
+    const agent = world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
+    if (agent) {
+      world.remove(agent.id);
+      this.removeView(agent.id);
+      return;
+    }
+    const c = world.connectionNear(wp.x / TILE, wp.y / TILE);
+    if (c) world.disconnect(c.id);
   }
 }

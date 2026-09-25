@@ -1,4 +1,4 @@
-import type { ResourceId, Terrain } from '../sim/types';
+import type { AgentType, ResourceId, Terrain } from '../sim/types';
 
 export const TILE = 32;
 
@@ -16,10 +16,16 @@ export const RESOURCE_COLOR: Record<ResourceId, number> = {
   regolito: 0xd08c5b,
 };
 
-/** Cor por função de agente (extração = âmbar). */
-export const AGENT_COLOR = {
+/** Cor por função de agente: extração = âmbar, armazenamento = violeta, logística = verde-água. */
+export const AGENT_COLOR: Record<AgentType, number> = {
   extrator: 0xe0a53f,
-} as const;
+  silo: 0xa78bfa,
+  divisor: 0x4fd1c5,
+  unificador: 0x4fd1c5,
+};
+
+export const LINK_COLOR = 0x6b7a94;
+export const WARN = 0xf5b041;
 
 export const UI = {
   panel: 0x141821,

@@ -15,16 +15,24 @@ npm test         # testes da simulação
 npm run build    # gera a versão estática em dist/
 ```
 
-## Controles (M1)
+## Controles
 
 | Ação | Comando |
 | --- | --- |
-| Construir Extrator | Tecla `1` (ou clique na barra) e clique no mapa |
+| Escolher agente | `1` Extrator · `2` Silo · `3` Divisor · `4` Unificador (ou clique na barra) |
+| Construir | Clique no mapa com um agente escolhido |
+| Conectar | Arraste de um agente até outro (alcance 12 células, 60 itens/min) |
+| Demolir agente ou conexão | Passe o mouse por cima e aperte `X` |
 | Cancelar | `Esc` ou `Q` |
-| Demolir | Passe o mouse sobre o agente e aperte `X` |
 | Mover câmera | Botão direito arrastando, ou `WASD` / setas |
 | Zoom | Roda do mouse |
 | Pausar / velocidade | `Espaço`, ou os botões ❚❚ 1× 2× 4× |
+
+## Regras do M2
+
+- O estoque conta só o que está guardado em **Silos**.
+- **Contrapressão:** nada se perde. Se o destino trava, a linha enche, o buffer da origem enche e a origem para. Anel âmbar = bloqueado; vermelho = bloqueado há mais de 5 s.
+- **Divisor:** 1 entrada, até 3 saídas, em rodízio (pula saídas travadas). **Unificador:** até 3 entradas alternadas, 1 saída.
 
 O jogo salva sozinho no navegador a cada 10 s. Use **Exportar/Importar** para backup em arquivo.
 
@@ -44,7 +52,7 @@ Depuração no console do navegador: `agentFrontier.state.world`.
 ## Marcos
 
 - [x] **M1** — mapa, câmera, construir Extrator, produção e save
-- [ ] **M2** — conexões ponto a ponto e itens fluindo
+- [x] **M2** — conexões ponto a ponto, itens fluindo, Silo, Divisor, Unificador
 - [ ] **M3** — receitas e energia
 - [ ] **M4** — Oficina, cartões de diretiva e bancada de testes
 - [ ] **M5** — confiabilidade, Verificador, experiência/drift e metas da Arca

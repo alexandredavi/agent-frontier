@@ -11,7 +11,7 @@ const SLOT = 56;
 const SLOT_GAP = 8;
 const SLOTS = 9;
 /** Agentes disponíveis na barra (índice = tecla - 1). */
-const HOTBAR: (AgentType | null)[] = ['extrator', null, null, null, null, null, null, null, null];
+const HOTBAR: (AgentType | null)[] = ['extrator', 'silo', 'divisor', 'unificador', null, null, null, null, null];
 
 interface Button {
   bg: Phaser.GameObjects.Rectangle;
@@ -45,7 +45,7 @@ export class UIScene extends Phaser.Scene {
     this.buildTopRight();
 
     this.help = this.add.text(0, 0,
-      'Clique: construir\nBotão direito / WASD: mover\nRoda: zoom\n1: Extrator · X: demolir\nEsc: cancelar · Espaço: pausar',
+      '1–4: escolher agente · Clique: construir\nArraste de um agente a outro: conectar\nX: demolir agente ou conexão\nBotão direito / WASD: mover · Roda: zoom\nEsc: cancelar · Espaço: pausar',
       { fontFamily: FONT, fontSize: '12px', color: UI.muted, lineSpacing: 4 });
 
     this.toastText = this.add
@@ -66,7 +66,8 @@ export class UIScene extends Phaser.Scene {
 
   update(): void {
     const w = this.state.world;
-    for (const id of Object.keys(RESOURCES) as ResourceId[]) this.stockTexts[id].setText(String(w.stock[id]));
+    const stock = w.stockTotals();
+    for (const id of Object.keys(RESOURCES) as ResourceId[]) this.stockTexts[id].setText(String(stock[id]));
     this.agentsText.setText(`Agentes: ${w.agents.size}`);
     const t = Math.floor(w.time);
     this.timeText.setText(`Tempo de jogo ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
@@ -78,7 +79,7 @@ export class UIScene extends Phaser.Scene {
     const ids = Object.keys(RESOURCES) as ResourceId[];
     const h = 40 + ids.length * 24 + 44;
     this.stockPanel = this.panel(0, 0, 200, h);
-    const title = this.add.text(14, 10, 'ESTOQUE', { fontFamily: FONT, fontSize: '11px', color: UI.muted, fontStyle: 'bold' });
+    const title = this.add.text(14, 10, 'ESTOQUE (SILOS)', { fontFamily: FONT, fontSize: '11px', color: UI.muted, fontStyle: 'bold' });
     const items: Phaser.GameObjects.GameObject[] = [this.stockPanel, title];
     ids.forEach((id, i) => {
       const y = 38 + i * 24;
