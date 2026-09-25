@@ -19,6 +19,8 @@ export class GameState {
   uiRects: Phaser.Geom.Rectangle[] = [];
   /** Painéis HTML sobre o jogo (Oficina), em pixels de tela. */
   overlayRect: () => DOMRect | null = () => null;
+  /** Texto do cartão de um agente (fornecido pela cena do mundo). */
+  describeAgent: (a: import('../sim/types').Agent) => string = () => '';
 
   constructor(public world: World) {}
 
@@ -57,8 +59,11 @@ export class GameState {
   }
 
   isOverUI(x: number, y: number): boolean {
-    const o = this.overlayRect();
-    if (o && x >= o.left && x <= o.right && y >= o.top && y <= o.bottom) return true;
+    // Painéis HTML abertos (Oficina, tutorial, cartão fixo, janelas)
+    for (const el of document.querySelectorAll('.ws.open, .tut.open, .insp.open, .modal, .victory.open')) {
+      const o = el.getBoundingClientRect();
+      if (x >= o.left && x <= o.right && y >= o.top && y <= o.bottom) return true;
+    }
     return this.uiRects.some((r) => r.contains(x, y));
   }
 }

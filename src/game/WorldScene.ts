@@ -12,6 +12,7 @@ interface AgentView {
   container: Phaser.GameObjects.Container;
   label: Phaser.GameObjects.Text;
   ring: Phaser.GameObjects.Graphics;
+  bolt: Phaser.GameObjects.Graphics;
   labelKey: string;
   ringKey: string;
 }
@@ -33,6 +34,9 @@ export class WorldScene extends Phaser.Scene {
   private tip!: Phaser.GameObjects.Text;
   private info!: Phaser.GameObjects.Text;
   private dragFrom: number | null = null;
+  private downAt = { x: 0, y: 0 };
+  /** Agente sendo movido (tecla M). */
+  private moving: number | null = null;
   private panning = false;
   private sinceSave = 0;
   private lastNow = performance.now();
@@ -61,6 +65,7 @@ export class WorldScene extends Phaser.Scene {
 
     this.rebuildViews();
     this.setupInput();
+    this.state.describeAgent = (a) => this.describe(a);
 
     this.state.events.on('world-replaced', this.rebuildViews, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.state.events.off('world-replaced', this.rebuildViews, this));
@@ -188,17 +193,28 @@ export class WorldScene extends Phaser.Scene {
     }
 
     const ring = this.add.graphics();
+    // Raio vermelho: trabalhando devagar por falta de energia
+    const bolt = this.add.graphics().setVisible(false);
+    bolt.fillStyle(0x0b0d12, 0.9);
+    bolt.fillCircle(10, 10, 8);
+    bolt.fillStyle(UI.bad, 1);
+    bolt.fillTriangle(11, 3, 6, 11, 10, 11);
+    bolt.fillTriangle(9, 17, 14, 9, 10, 9);
     const label = this.add.text(size / 2, size - 10, '', { fontFamily: FONT, fontSize: '11px', color: '#e8ecf3' }).setOrigin(0.5);
-    const container = this.add.container(agent.x * TILE, agent.y * TILE, [ring, g, label]).setDepth(10);
+    const container = this.add.container(agent.x * TILE, agent.y * TILE, [ring, g, label, bolt]).setDepth(10);
     container.setScale(0.6).setAlpha(0);
     this.tweens.add({ targets: container, scale: 1, alpha: 1, duration: 180, ease: 'Back.Out' });
 
-    const view: AgentView = { container, label, ring, labelKey: '', ringKey: '' };
+    const view: AgentView = { container, label, ring, bolt, labelKey: '', ringKey: '' };
     this.views.set(agent.id, view);
     this.refreshView(agent, view);
   }
 
   private refreshView(agent: Agent, view: AgentView): void {
+    const w = this.state.world;
+    const working = agent.running || (agent.type === 'verificador' && agent.queue.length > 0);
+    view.bolt.setVisible(working && w.power.factor < 1);
+    if (view.container.x !== agent.x * TILE || view.container.y !== agent.y * TILE) view.container.setPosition(agent.x * TILE, agent.y * TILE);
     const def = AGENT_DEFS[agent.type];
     let text = '';
     if (def.recipe || agent.type === 'descarte') text = String(agent.produced);
@@ -303,6 +319,30 @@ export class WorldScene extends Phaser.Scene {
     const world = this.state.world;
     const overUI = this.state.isOverUI(p.x, p.y);
     const hoverAgent = world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
+
+    // Movendo um agente (tecla M)
+    if (this.moving !== null) {
+      const a = world.agents.get(this.moving);
+      if (!a) {
+        this.moving = null;
+        return;
+      }
+      const x = Math.round(wp.x / TILE - AGENT_SIZE / 2);
+      const y = Math.round(wp.y / TILE - AGENT_SIZE / 2);
+      const ok = this.canMoveTo(a, x, y);
+      const color = ok.ok ? UI.ok : UI.bad;
+      const size = AGENT_SIZE * TILE;
+      g.fillStyle(color, 0.22);
+      g.fillRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
+      g.lineStyle(2, color, 0.9);
+      g.strokeRoundedRect(x * TILE + 2, y * TILE + 2, size - 4, size - 4, 8);
+      this.tip
+        .setText(ok.ok ? `Mover ${AGENT_DEFS[a.type].name} · clique para soltar · Esc cancela` : PLACE_ERROR_TEXT[ok.reason])
+        .setPosition(x * TILE + size + 6, y * TILE)
+        .setScale(zoomFix)
+        .setVisible(true);
+      return;
+    }
 
     // Arrastando uma conexão
     if (this.dragFrom !== null) {
@@ -418,7 +458,7 @@ export class WorldScene extends Phaser.Scene {
     if (def.capacity > 0) lines.push(`${a.type === 'silo' ? 'Estoque' : 'Saída'}: ${a.buffer.length}/${def.capacity}`);
     if (def.maxIn > 0) lines.push(`Entradas: ${w.inputsOf(a.id).length}/${def.maxIn}`);
     if (def.maxOut > 0) lines.push(`Saídas: ${w.outputsOf(a.id).length}/${def.maxOut}`);
-    lines.push(def.maxIn + def.maxOut > 0 ? 'Arraste para conectar · X: demolir' : 'X: demolir');
+    lines.push(def.maxIn + def.maxOut > 0 ? 'Arraste: conectar · Clique: fixar cartão · M: mover · X: demolir' : 'Clique: fixar cartão · M: mover · X: demolir');
     return lines.join('\n');
   }
 
@@ -447,9 +487,14 @@ export class WorldScene extends Phaser.Scene {
       }
       if (this.state.isOverUI(p.x, p.y)) return;
       const wp = cam.getWorldPoint(p.x, p.y);
+      if (this.moving !== null) {
+        this.dropMove(wp.x, wp.y);
+        return;
+      }
       const agent = this.state.world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
       if (agent) {
         this.dragFrom = agent.id;
+        this.downAt = { x: p.x, y: p.y };
         return;
       }
       this.tryBuild(wp.x, wp.y);
@@ -465,9 +510,20 @@ export class WorldScene extends Phaser.Scene {
       const target = this.state.world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
       const fromId = this.dragFrom;
       this.dragFrom = null;
+      // Clique sem arrastar = fixar o cartão do agente
+      if (target && target.id === fromId && Math.hypot(p.x - this.downAt.x, p.y - this.downAt.y) < 6) {
+        this.state.events.emit('pin', fromId);
+        return;
+      }
       if (!target || target.id === fromId) return;
       const res = this.state.world.connect(fromId, target.id);
       if (!res.ok) this.state.toast(CONNECT_ERROR_TEXT[res.reason]);
+    });
+
+    // Soltou o botão fora do canvas (ex.: sobre um painel HTML): cancela arrasto e câmera
+    this.input.on('pointerupoutside', () => {
+      this.dragFrom = null;
+      this.panning = false;
     });
 
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
@@ -488,9 +544,23 @@ export class WorldScene extends Phaser.Scene {
 
     const kb = this.input.keyboard!;
     const cancel = () => {
+      if (this.moving !== null) {
+        this.moving = null;
+        return;
+      }
       this.dragFrom = null;
       this.state.setTool({ kind: 'none' });
+      this.state.events.emit('pin', null);
     };
+    kb.on('keydown-M', () => {
+      const p = this.input.activePointer;
+      const wp = cam.getWorldPoint(p.x, p.y);
+      const a = this.state.world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
+      if (a) {
+        this.moving = a.id;
+        this.state.setTool({ kind: 'none' });
+      }
+    });
     kb.on('keydown-ESC', cancel);
     kb.on('keydown-Q', cancel);
     kb.on('keydown-X', () => this.demolishHovered());
@@ -506,6 +576,32 @@ export class WorldScene extends Phaser.Scene {
       if (keys.W.isDown || keys.UP.isDown) cam.scrollY -= v;
       if (keys.S.isDown || keys.DOWN.isDown) cam.scrollY += v;
     });
+  }
+
+  /** Validação do destino sem alterar o mundo. */
+  private canMoveTo(a: Agent, x: number, y: number): { ok: true } | { ok: false; reason: keyof typeof PLACE_ERROR_TEXT } {
+    for (let dy = 0; dy < AGENT_SIZE; dy++)
+      for (let dx = 0; dx < AGENT_SIZE; dx++) {
+        const other = this.state.world.agentAt(x + dx, y + dy);
+        if (other && other.id !== a.id) return { ok: false, reason: 'ocupado' };
+      }
+    // Checa terreno/nó ignorando a ocupação do próprio agente
+    const r = this.state.world.canPlace(a.type, x, y);
+    if (!r.ok && r.reason !== 'ocupado') return r;
+    return { ok: true };
+  }
+
+  private dropMove(wx: number, wy: number): void {
+    const id = this.moving!;
+    const x = Math.round(wx / TILE - AGENT_SIZE / 2);
+    const y = Math.round(wy / TILE - AGENT_SIZE / 2);
+    const r = this.state.world.move(id, x, y);
+    if (!r.ok) {
+      this.state.toast(PLACE_ERROR_TEXT[r.reason]);
+      return;
+    }
+    this.moving = null;
+    if (r.removed) this.state.toast(`${r.removed} conexão${r.removed > 1 ? 'ões ficaram' : ' ficou'} fora de alcance e ${r.removed > 1 ? 'foram removidas' : 'foi removida'}`);
   }
 
   private tryBuild(wx: number, wy: number): void {
@@ -525,10 +621,14 @@ export class WorldScene extends Phaser.Scene {
     const agent = world.agentAt(Math.floor(wp.x / TILE), Math.floor(wp.y / TILE));
     if (agent) {
       world.remove(agent.id);
+      world.count('demolicoes');
       this.removeView(agent.id);
       return;
     }
     const c = world.connectionNear(wp.x / TILE, wp.y / TILE);
-    if (c) world.disconnect(c.id);
+    if (c) {
+      world.disconnect(c.id);
+      world.count('conexoes_removidas');
+    }
   }
 }

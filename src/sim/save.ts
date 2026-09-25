@@ -2,7 +2,7 @@ import { AGENT_DEFS, INPUT_CYCLES, LINK, RESOURCES } from './defs';
 import { CARDS, CORES, type CardId, type CoreId, type Design, TOOLS, type ToolId, isMachine } from './designs';
 import type { GameMap } from './map';
 import { ARCA_PHASES } from './defs';
-import type { AgentType, ArcaState, Item, ResourceId } from './types';
+import type { AgentType, ArcaState, Diary, Item, ResourceId, TutorialState } from './types';
 import { World } from './world';
 
 export const SAVE_VERSION = 5;
@@ -13,6 +13,8 @@ export interface SaveData {
   rng: number;
   tier: number;
   arca: ArcaState;
+  diary: Diary;
+  tutorial: TutorialState | null;
   /** Drift pendente por versão (inclui as de fábrica, que não são salvas em `designs`). */
   drift: Record<string, number>;
   designs: Design[];
@@ -48,6 +50,8 @@ export function serialize(world: World): SaveData {
     rng: world.rng.state,
     tier: world.tier,
     arca: { ...world.arca },
+    diary: JSON.parse(JSON.stringify(world.diary)),
+    tutorial: world.tutorial ? { ...world.tutorial } : null,
     drift: Object.fromEntries([...world.designs.values()].filter((d) => d.drift).map((d) => [d.id, d.drift!])),
     designs: [...world.designs.values()].filter((d) => !d.factory).map((d) => ({ ...d, cards: [...d.cards] })),
     active: { ...world.activeDesign },
@@ -122,8 +126,24 @@ export function deserialize(data: unknown, map: GameMap): World {
   const arca = d.arca as Partial<ArcaState> | undefined;
   if (d.version === 5 && arca && typeof arca === 'object') {
     const phase = Math.max(0, Math.min(ARCA_PHASES.length - 1, Math.floor(num(arca.phase))));
-    world.arca = { phase, delivered: Math.max(0, Math.floor(num(arca.delivered))), rejected: Math.max(0, Math.floor(num(arca.rejected))), done: arca.done === true };
+    world.arca = {
+      phase,
+      delivered: Math.max(0, Math.floor(num(arca.delivered))),
+      rejected: Math.max(0, Math.floor(num(arca.rejected))),
+      surplus: Math.max(0, Math.floor(num(arca.surplus))),
+      done: arca.done === true,
+    };
   }
+  // Diário e tutorial: saves sem eles começam um diário novo e não mostram tutorial
+  const diary = d.diary as Partial<Diary> | undefined;
+  if (diary && typeof diary.startedAt === 'string' && diary.milestones && diary.counts && Array.isArray(diary.samples)) {
+    world.diary = { startedAt: diary.startedAt, milestones: diary.milestones, counts: diary.counts, samples: diary.samples.slice(-600) };
+  }
+  const tut = d.tutorial as Partial<TutorialState> | null | undefined;
+  world.tutorial =
+    tut && typeof tut === 'object'
+      ? { step: Math.max(0, Math.floor(num(tut.step))), skipped: tut.skipped === true, done: tut.done === true }
+      : null;
 
   if (Array.isArray(d.designs)) {
     for (const raw of d.designs as Record<string, unknown>[]) {

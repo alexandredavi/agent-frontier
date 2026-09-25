@@ -70,6 +70,7 @@ export class Workshop {
 
   open(): void {
     this.root.classList.add('open');
+    this.world.mark('oficina_aberta');
     this.render();
     this.state.events.emit('overlay', true);
   }
@@ -112,6 +113,8 @@ export class Workshop {
 
   private runBench(): void {
     if (!this.draft || this.bench.running) return;
+    this.world.mark('primeira_bancada');
+    this.world.count('bancadas');
     const seed = (Math.random() * 2 ** 32) >>> 0;
     const base = this.world.designs.get(this.draft.baseId)!;
     const draftDesign = this.draftDesign();
@@ -145,6 +148,8 @@ export class Workshop {
     const design: Design = { id, name: d.name.trim() || `${AGENT_DEFS[d.role].name} v${version}`, role: d.role, core: d.core, tool: d.tool, cards: [...d.cards], version, factory: false };
     this.world.addDesign(design);
     this.world.setActive(id);
+    this.world.mark('primeira_versao');
+    this.world.count('versoes');
     const base = this.world.designs.get(d.baseId)!;
     const count = base.role === design.role ? this.world.agentsUsing(base.id).length : 0;
     this.draft = null;
@@ -167,6 +172,8 @@ export class Workshop {
       if (this.recal.progress < 1) requestAnimationFrame(step);
       else {
         this.world.recalibrate(id);
+        this.world.mark('primeira_recalibracao');
+        this.world.count('recalibracoes');
         const n = this.world.agentsUsing(id).length;
         this.recal = null;
         this.state.toast(`${this.world.designs.get(id)!.name} recalibrada · ${n} agente${n === 1 ? '' : 's'} sem drift`);

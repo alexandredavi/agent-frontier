@@ -129,6 +129,26 @@ export interface ArcaState {
   phase: number;
   delivered: number;
   rejected: number;
+  /** Cargas de fases anteriores recebidas (não contam). */
+  surplus: number;
   /** Todas as fases concluídas. */
+  done: boolean;
+}
+
+/** Diário de sessão para o playtest (fica no save, no navegador). */
+export interface Diary {
+  /** Início da sessão (ISO). */
+  startedAt: string;
+  /** Marcos: primeira vez que algo aconteceu (tempo real em s desde o início e tempo de jogo em s). */
+  milestones: Record<string, { real: number; game: number }>;
+  counts: Record<string, number>;
+  /** Amostra a cada minuto de jogo. */
+  samples: { game: number; agents: number; blocked: number; power: number; stock: number; defects: number }[];
+}
+
+/** Tutorial da MERIDIAN: passo atual (índice) ou encerrado. */
+export interface TutorialState {
+  step: number;
+  skipped: boolean;
   done: boolean;
 }

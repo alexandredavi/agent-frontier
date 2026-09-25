@@ -68,7 +68,7 @@ describe('Arca', () => {
 
   it('Fase 1: 50 Módulos concluem o protótipo', () => {
     const w = new World(openMap(30, 10));
-    w.arca = { phase: 1, delivered: 49, rejected: 0, done: false };
+    w.arca = { phase: 1, delivered: 49, rejected: 0, surplus: 0, done: false };
     w.tier = 1;
     const p = placeOk(w, 'plataforma', 2, 2);
     push(w, p, [{ res: 'modulo', bad: false }]);
@@ -176,7 +176,7 @@ describe('save v5', () => {
   it('guarda tier, Arca, drift das versões de fábrica e o Verificador', () => {
     const map = GameMap.fromAscii(MAP_ROWS);
     const w = new World(map);
-    w.arca = { phase: 0, delivered: 7, rejected: 2, done: false };
+    w.arca = { phase: 0, delivered: 7, rejected: 2, surplus: 0, done: false };
     const v = placeOk(w, 'verificador', 20, 20);
     v.caught = 3;
     v.queue.push({ res: 'mapa', bad: true });

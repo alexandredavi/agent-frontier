@@ -15,6 +15,21 @@ npm test         # testes da simulação
 npm run build    # gera a versão estática em dist/
 ```
 
+## Publicar no GitHub Pages (playtest)
+
+O workflow `.github/workflows/pages.yml` testa, gera e publica o jogo a cada push na `main`.
+
+1. No GitHub, crie um repositório vazio (ex.: `agent-frontier`), sem README.
+2. Nesta pasta, rode (troque `SEU-USUARIO`):
+   ```bash
+   git remote add origin https://github.com/SEU-USUARIO/agent-frontier.git
+   git push -u origin main
+   ```
+3. No repositório: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+4. Aguarde a aba **Actions** terminar (~1 min). O link fica em `https://SEU-USUARIO.github.io/agent-frontier/`.
+
+Cada `git push` depois disso atualiza o link. O save e o Diário ficam no navegador de cada jogador.
+
 ## Controles
 
 | Ação | Comando |
@@ -24,6 +39,8 @@ npm run build    # gera a versão estática em dist/
 | Escolher agente | `1`–`9` dentro da aba (ou clique no espaço) |
 | Construir | Clique no mapa com um agente escolhido |
 | Conectar | Arraste de um agente até outro (alcance 12 células, 60 itens/min) |
+| Fixar o cartão de um agente | Clique no agente (sem arrastar); `Esc` fecha |
+| Mover agente | `M` sobre o agente, clique para soltar (`Esc` cancela) |
 | Demolir agente ou conexão | Passe o mouse por cima e aperte `X` |
 | Cancelar | `Esc` ou `Q` |
 | Mover câmera | Botão direito arrastando, ou `WASD` / setas |
@@ -66,7 +83,7 @@ Agentes de IA (extração e processamento) são montados com **Núcleo + Ferrame
 - **Receitas:** cada ingrediente tem buffer para 2 ciclos; a máquina aceita até 2 entradas. Item que ela não usa é recusado e trava a linha.
 - **Energia:** rede global. A cápsula de pouso dá 10 kW; cada Painel Solar, 20 kW. Máquinas só consomem trabalhando. Faltou energia, extração e processamento rodam na proporção disponível.
 
-O jogo salva sozinho no navegador a cada 10 s. Use **Exportar/Importar** para backup em arquivo.
+O jogo salva sozinho no navegador a cada 10 s. Use **Exportar/Importar** para backup em arquivo, **Novo jogo** para recomeçar e **Diário** para exportar as métricas do playtest (marcos, contagens e uma amostra por minuto de jogo).
 
 ## Estrutura
 

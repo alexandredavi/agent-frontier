@@ -2,7 +2,7 @@ import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, BIOME_PENALTY, CAPSULE_KW, DRIFT_P
 import { BASE_RELIABILITY, type Design, type DesignStats, MACHINE_ROLES, designStats, factoryDesign, factoryId, isMachine } from './designs';
 import type { GameMap } from './map';
 import { Rng } from './rng';
-import type { Agent, AgentType, ArcaState, Connection, Item, PowerState, ResourceId } from './types';
+import type { Agent, AgentType, ArcaState, Connection, Diary, Item, PowerState, ResourceId, TutorialState } from './types';
 
 export type PlaceError = 'fora-do-mapa' | 'sinal-fraco' | 'terreno' | 'ocupado' | 'sem-no' | 'nos-misturados' | 'bloqueado';
 
@@ -70,6 +70,13 @@ export function newAgent(id: number, type: AgentType, x: number, y: number, reso
   };
 }
 
+export function newDiary(): Diary {
+  return { startedAt: new Date().toISOString(), milestones: {}, counts: {}, samples: [] };
+}
+
+/** Passos do tutorial da MERIDIAN (o texto fica na interface). */
+export const TUTORIAL_STEPS = ['sensor', 'cartografo', 'conectar', 'plataforma', 'entregar', 'bancada', 'verificador'] as const;
+
 export class World {
   readonly agents = new Map<number, Agent>();
   readonly connections = new Map<number, Connection>();
@@ -83,7 +90,11 @@ export class World {
   rng = new Rng();
   /** Tier liberado (0 no início; 1 depois da Fase 0 da Arca). */
   tier = 0;
-  arca: ArcaState = { phase: 0, delivered: 0, rejected: 0, done: false };
+  arca: ArcaState = { phase: 0, delivered: 0, rejected: 0, surplus: 0, done: false };
+  diary: Diary = newDiary();
+  /** null = sem tutorial (saves antigos); senão, o progresso. */
+  tutorial: TutorialState | null = { step: 0, skipped: false, done: false };
+  private nextSample = 60;
   /** Acontecimentos para a interface anunciar ('tier1', 'vitoria'); ela esvazia a fila. */
   events: string[] = [];
   private statsCache = new Map<string, DesignStats>();
@@ -178,6 +189,52 @@ export class World {
     return this.reliabilityBreakdown(a).real;
   }
 
+  // ---------- diário de sessão ----------
+
+  /** Registra a primeira vez que algo acontece. */
+  mark(key: string): void {
+    if (this.diary.milestones[key]) return;
+    const real = (Date.now() - Date.parse(this.diary.startedAt)) / 1000;
+    this.diary.milestones[key] = { real: Math.round(real), game: Math.round(this.time) };
+  }
+
+  count(key: string, n = 1): void {
+    this.diary.counts[key] = (this.diary.counts[key] ?? 0) + n;
+  }
+
+  private sample(): void {
+    const stock = Object.values(this.stockTotals()).reduce((a, b) => a + (b ?? 0), 0);
+    const defects = Object.values(this.defectTotals()).reduce((a, b) => a + (b ?? 0), 0);
+    let blocked = 0;
+    for (const a of this.agents.values()) if (a.status === 'bloqueado') blocked++;
+    this.diary.samples.push({ game: Math.round(this.time), agents: this.agents.size, blocked, power: Math.round(this.power.factor * 100), stock, defects });
+    if (this.diary.samples.length > 600) this.diary.samples.shift();
+  }
+
+  // ---------- tutorial ----------
+
+  /** Avança o tutorial quando a condição do passo atual é cumprida. */
+  checkTutorial(): void {
+    const t = this.tutorial;
+    if (!t || t.done || t.skipped) return;
+    const has = (type: AgentType) => [...this.agents.values()].some((a) => a.type === type);
+    const linked = (from: AgentType, to: AgentType) =>
+      [...this.connections.values()].some((c) => this.agents.get(c.from)?.type === from && this.agents.get(c.to)?.type === to);
+    const conds: Record<(typeof TUTORIAL_STEPS)[number], () => boolean> = {
+      sensor: () => has('sensor'),
+      cartografo: () => has('cartografo'),
+      conectar: () => linked('sensor', 'cartografo'),
+      plataforma: () => has('plataforma') && (linked('cartografo', 'plataforma') || linked('verificador', 'plataforma')),
+      entregar: () => !!this.diary.milestones.primeiro_mapa || this.tier >= 1,
+      bancada: () => !!this.diary.milestones.primeira_bancada,
+      verificador: () => linked('cartografo', 'verificador') && linked('verificador', 'plataforma'),
+    };
+    while (!t.done && conds[TUTORIAL_STEPS[t.step]]()) {
+      t.step++;
+      if (t.step >= TUTORIAL_STEPS.length) t.done = true;
+    }
+  }
+
   // ---------- tiers e Arca ----------
 
   isUnlocked(type: AgentType, resource: ResourceId | null = null): boolean {
@@ -195,16 +252,22 @@ export class World {
     this.tier = 1;
     if (withDrift) for (const d of this.designs.values()) d.drift = DRIFT_PP;
     this.events.push('tier1');
+    this.mark('tier1');
   }
 
-  /** A Plataforma de Carga aceita este item? (só cargas da fase atual) */
+  /** A Plataforma de Carga aceita este item? Cargas da fase atual contam; de fases anteriores viram excedente. */
   private cargoWanted(res: ResourceId): boolean {
-    if (this.arca.done) return ARCA_PHASES.some((p) => p.res === res);
-    return ARCA_PHASES[this.arca.phase].res === res;
+    const last = this.arca.done ? ARCA_PHASES.length - 1 : this.arca.phase;
+    return ARCA_PHASES.slice(0, last + 1).some((p) => p.res === res);
   }
 
   private deliver(item: Item): void {
     if (this.arca.done) return;
+    if (ARCA_PHASES[this.arca.phase].res !== item.res) {
+      this.arca.surplus++;
+      return;
+    }
+    if (item.res === 'mapa' && !item.bad) this.mark('primeiro_mapa');
     if (item.bad) {
       this.arca.rejected++;
       return;
@@ -214,10 +277,11 @@ export class World {
     if (this.arca.delivered < phase.n) return;
     if (this.arca.phase === 0) this.unlockTier1();
     if (this.arca.phase + 1 < ARCA_PHASES.length) {
-      this.arca = { phase: this.arca.phase + 1, delivered: 0, rejected: 0, done: false };
+      this.arca = { phase: this.arca.phase + 1, delivered: 0, rejected: 0, surplus: 0, done: false };
     } else {
       this.arca = { ...this.arca, done: true };
       this.events.push('vitoria');
+      this.mark('vitoria');
     }
   }
 
@@ -265,9 +329,51 @@ export class World {
     if (d && !this.designUnlocked(d)) return { ok: false, reason: 'bloqueado' };
     const agent = newAgent(this.nextId++, type, x, y, check.resource, design);
     agent.biome = this.biomeAt(x, y);
+    this.mark('primeiro_agente');
     this.agents.set(agent.id, agent);
     this.fill(agent, agent.id);
     return { ok: true, agent };
+  }
+
+  /**
+   * Move um agente para (x, y). Mantém as conexões que continuam no alcance e
+   * remove as outras. O Extrator precisa continuar sobre um nó (e pode mudar de recurso).
+   */
+  move(id: number, x: number, y: number): { ok: true; removed: number } | { ok: false; reason: PlaceError } {
+    const a = this.agents.get(id);
+    if (!a) return { ok: false, reason: 'fora-do-mapa' };
+    this.fill(a, 0);
+    const check = this.canPlace(a.type, x, y);
+    if (!check.ok) {
+      this.fill(a, a.id);
+      return check;
+    }
+    a.x = x;
+    a.y = y;
+    if (check.resource) a.resource = check.resource;
+    a.biome = this.biomeAt(x, y);
+    this.fill(a, a.id);
+    let removed = 0;
+    for (const c of [...this.connections.values()]) {
+      if (c.from !== id && c.to !== id) continue;
+      const p = agentCenter(this.agents.get(c.from)!);
+      const q = agentCenter(this.agents.get(c.to)!);
+      const dist = Math.hypot(q.x - p.x, q.y - p.y);
+      if (dist > LINK.range + EPS) {
+        this.connections.delete(c.id);
+        removed++;
+        continue;
+      }
+      c.length = Math.max(LINK.gap, dist - AGENT_SIZE);
+      let limit = c.length;
+      for (const it of c.items) {
+        it.pos = Math.min(it.pos, limit);
+        limit = it.pos - LINK.gap;
+      }
+      c.items = c.items.filter((it) => it.pos >= 0);
+    }
+    this.count('movimentos');
+    return { ok: true, removed };
   }
 
   /** Remove o agente e todas as suas conexões (itens nas linhas se perdem). */
@@ -329,6 +435,7 @@ export class World {
     if (!check.ok) return check;
     const connection: Connection = { id: this.nextId++, from: fromId, to: toId, length: check.length, items: [], cooldown: 0 };
     this.connections.set(connection.id, connection);
+    this.mark('primeira_conexao');
     return { ok: true, connection };
   }
 
@@ -607,6 +714,13 @@ export class World {
       a.status = this.computeStatus(a);
       a.stalledFor = a.status === 'bloqueado' ? a.stalledFor + dt : 0;
     }
+
+    // 8. Diário (amostra a cada minuto de jogo) e tutorial
+    if (this.time >= this.nextSample) {
+      this.nextSample = Math.floor(this.time / 60) * 60 + 60;
+      this.sample();
+    }
+    this.checkTutorial();
   }
 
   /** Verificador: inspeciona itens da fila na velocidade da versão. */

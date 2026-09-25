@@ -51,6 +51,8 @@ export class UIScene extends Phaser.Scene {
   private savedText!: Phaser.GameObjects.Text;
 
   private help!: Phaser.GameObjects.Text;
+  private tutorialOpen = false;
+  private slotTip!: Phaser.GameObjects.Text;
   private toastText!: Phaser.GameObjects.Text;
   private toastTween?: Phaser.Tweens.Tween;
 
@@ -67,10 +69,15 @@ export class UIScene extends Phaser.Scene {
     this.help = this.add.text(
       0,
       0,
-      'Tab: trocar aba · 1–9: escolher agente · O: Oficina\nClique: construir · Arraste agente→agente: conectar\nX: demolir agente ou conexão · Esc: cancelar\nBotão direito / WASD: mover · Roda: zoom\nEspaço: pausar',
+      'Tab: trocar aba · 1–9: escolher agente · O: Oficina\nClique: construir · Arraste agente→agente: conectar\nClique num agente: fixar cartão · M: mover agente\nX: demolir agente ou conexão · Esc: cancelar\nBotão direito / WASD: câmera · Roda: zoom · Espaço: pausar',
       { fontFamily: FONT, fontSize: '12px', color: UI.muted, lineSpacing: 4 },
     );
 
+    this.slotTip = this.add
+      .text(0, 0, '', { fontFamily: FONT, fontSize: '12px', color: '#ffffff', backgroundColor: '#000000cc', padding: { x: 6, y: 3 } })
+      .setOrigin(0.5, 1)
+      .setVisible(false)
+      .setDepth(50);
     this.toastText = this.add
       .text(0, 0, '', { fontFamily: FONT, fontSize: '14px', color: '#ffffff', backgroundColor: '#1f2531f0', padding: { x: 12, y: 7 } })
       .setOrigin(0.5, 0)
@@ -83,6 +90,10 @@ export class UIScene extends Phaser.Scene {
     this.state.events.on('speed', this.refreshSpeed, this);
     this.state.events.on('toast', this.showToast, this);
     this.state.events.on('saved', this.flashSaved, this);
+    this.state.events.on('tutorial-visible', (v: boolean) => {
+      this.tutorialOpen = v;
+      this.layout();
+    });
 
     // Numa tecla de número bloqueada, avisa em vez de escolher
     const kb = this.input.keyboard!;
@@ -261,13 +272,24 @@ export class UIScene extends Phaser.Scene {
         const g = this.add.graphics();
         drawAgentIcon(g, type, x + SLOT / 2, 12 + SLOT / 2 - 5, 11, AGENT_COLOR[type]);
         const w = this.state.world;
-        const title = isMachine(type) ? (w.designs.get(w.activeDesign[type] ?? '')?.name ?? AGENT_DEFS[type].name) : AGENT_DEFS[type].name;
+        const design = isMachine(type) ? w.designs.get(w.activeDesign[type] ?? '') : undefined;
+        // Duas linhas: papel + versão (o nome completo aparece ao passar o mouse)
+        const base = AGENT_DEFS[type].name;
+        const title = design ? `${base}\nv${design.version}` : base.length > 11 && base.includes(' ') ? base.replace(' ', '\n') : base;
         const label = this.add
-          .text(x + SLOT / 2, 12 + SLOT - 5, title, { fontFamily: FONT, fontSize: '9px', color: UI.text })
+          .text(x + SLOT / 2, 12 + SLOT - 3, title, { fontFamily: FONT, fontSize: '9px', color: UI.text, align: 'center', lineSpacing: -2 })
           .setOrigin(0.5, 1);
         if (label.width > SLOT - 4) label.setScale((SLOT - 4) / label.width);
+        g.setY(title.includes('\n') ? -4 : 0);
         this.slotLayer.add([g, label]);
-        frame.setInteractive({ useHandCursor: true }).on('pointerdown', () => this.state.toggleBuild(type));
+        const full = design ? design.name : AGENT_DEFS[type].name;
+        frame
+          .setInteractive({ useHandCursor: true })
+          .on('pointerdown', () => this.state.toggleBuild(type))
+          .on('pointerover', () => {
+            this.slotTip.setText(full).setPosition(this.hotbar.x + x + SLOT / 2, this.hotbar.y - 6).setVisible(true);
+          })
+          .on('pointerout', () => this.slotTip.setVisible(false));
       } else {
         frame.setAlpha(0.4);
       }
@@ -300,7 +322,7 @@ export class UIScene extends Phaser.Scene {
       { s: 4, label: '4×' },
     ];
     const bw = 40;
-    const width = speeds.length * (bw + 4) + 16 + 2 * 84;
+    const width = speeds.length * (bw + 4) + 16 + 4 * 84;
     const bg = this.panel(0, 0, width, 48);
     const items: Phaser.GameObjects.GameObject[] = [bg];
     speeds.forEach(({ s, label }, i) => {
@@ -319,7 +341,9 @@ export class UIScene extends Phaser.Scene {
         })
         .catch(() => this.state.toast('Arquivo de save inválido'));
     });
-    items.push(exp.bg, exp.text, imp.bg, imp.text);
+    const diary = this.button(x0 + 168, 8, 80, 32, 'Diário', () => this.state.events.emit('diary-export'));
+    const fresh = this.button(x0 + 252, 8, 80, 32, 'Novo jogo', () => this.state.events.emit('new-game'));
+    items.push(exp.bg, exp.text, imp.bg, imp.text, diary.bg, diary.text, fresh.bg, fresh.text);
     this.savedText = this.add.text(width - 8, 52, 'Salvo', { fontFamily: FONT, fontSize: '11px', color: UI.muted }).setOrigin(1, 0).setAlpha(0);
     items.push(this.savedText);
     this.speedGroup = this.add.container(0, 16, items);
@@ -375,7 +399,8 @@ export class UIScene extends Phaser.Scene {
     this.arcaGroup.setPosition(sx, sy + sh + 8);
     const arcaBottom = this.arcaGroup.y + ARCA_H;
     this.help.setPosition(sx + 2, arcaBottom + 12);
-    this.help.setVisible(this.help.y + this.help.height < this.hotbar.y - 8 || this.hotbar.x > this.help.x + this.help.width + 16);
+    this.state.events.emit('hud-bottom', arcaBottom);
+    this.help.setVisible(!this.tutorialOpen && (this.help.y + this.help.height < this.hotbar.y - 8 || this.hotbar.x > this.help.x + this.help.width + 16));
 
     this.state.uiRects = [
       new Phaser.Geom.Rectangle(this.hotbar.x, this.hotbar.y, hbW, hbH),

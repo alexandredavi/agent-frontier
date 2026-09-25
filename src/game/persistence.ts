@@ -51,3 +51,29 @@ export function importSave(map: GameMap): Promise<World> {
     input.click();
   });
 }
+
+/** Exporta o Diário de sessão (playtest) como JSON. Nada sai do computador: é um download local. */
+export function exportDiary(world: World): void {
+  const t = Math.round(world.time);
+  const data = {
+    jogo: 'Agent Frontier',
+    versao: 'MVP (Etapa 7)',
+    exportadoEm: new Date().toISOString(),
+    resumo: {
+      tempoDeJogoSeg: t,
+      tier: world.tier,
+      arca: world.arca,
+      agentes: world.agents.size,
+      versoesCriadas: [...world.designs.values()].filter((d) => !d.factory).length,
+      tutorial: world.tutorial,
+    },
+    diario: world.diary,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `agent-frontier-diario-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
