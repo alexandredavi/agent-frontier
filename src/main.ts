@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { SkyScene } from './game/SkyScene';
 import { WorldScene } from './game/WorldScene';
 import { UIScene } from './game/UIScene';
 import { GameState } from './game/state';
@@ -42,7 +43,7 @@ const game = new Phaser.Game({
   backgroundColor: '#0b0d12',
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
   render: { antialias: true },
-  scene: [new WorldScene(state), new UIScene(state)],
+  scene: [new SkyScene(state), new WorldScene(state), new UIScene(state)],
 });
 
 // Exposto para depuração no console do navegador: agentFrontier.state.world

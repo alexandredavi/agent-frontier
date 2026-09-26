@@ -6,7 +6,7 @@ import { CONNECT_ERROR_TEXT, PLACE_ERROR_TEXT } from '../sim/world';
 import { ART_HEIGHT, type ArtType, CORE_OFFSET } from './iso/art';
 import { ANCHOR_X, ANCHOR_Y, FRAMES, FRAME_H, FRAME_W, artKey, bakeArt, frameCount } from './iso/bake';
 import { type Pickable, TH, TW, cellAt, depthOf, footprintAt, isoCircle, pickFrontmost, toIso } from './iso/projection';
-import { renderTerrain, visualHeight } from './iso/terrain';
+import { PALETTES, renderHaze, renderTerrain, terraStage, visualHeight } from './iso/terrain';
 import { drawItem } from './icons';
 import { writeSave } from './persistence';
 import type { GameState } from './state';
@@ -62,21 +62,23 @@ export class WorldScene extends Phaser.Scene {
   private lastNow = performance.now();
   private animClock = 0;
   /** Medições para diagnóstico (window.agentFrontier.game.scene.getScene('world').perf). */
-  perf = { bakeMs: 0, textureMb: 0 };
+  perf = { bakeMs: 0, textureMb: 0, terrainMs: 0 };
+  /** Estágio de terraformação desenhado agora (paleta do terreno e do céu). */
+  stage = -1;
+  private terrainImg?: Phaser.GameObjects.Image;
+  private haze?: Phaser.GameObjects.TileSprite;
+  private terrainSeq = 0;
 
   constructor(private readonly state: GameState) {
-    super({ key: 'world' });
+    super({ key: 'world', active: true });
   }
 
   create(): void {
-    const { map } = this.state.world;
     const baked = bakeArt(this);
-    this.perf = { bakeMs: baked.ms, textureMb: baked.mb };
+    this.perf = { bakeMs: baked.ms, textureMb: baked.mb, terrainMs: 0 };
 
-    // Terreno pré-renderizado numa textura só
-    const terr = renderTerrain(map);
-    if (!this.textures.exists('terrain')) this.textures.addCanvas('terrain', terr.canvas);
-    this.add.image(terr.left, terr.top, 'terrain').setOrigin(0).setDepth(0);
+    // Terreno pré-renderizado numa textura só (a paleta segue a terraformação)
+    const terr = this.setStage(terraStage(this.state.world.arca), false);
 
     this.links = this.add.graphics().setDepth(5);
     this.over = this.add.graphics().setDepth(1e6);
@@ -97,8 +99,8 @@ export class WorldScene extends Phaser.Scene {
     this.setupInput();
     this.state.describeAgent = (a) => this.describe(a);
 
-    this.state.events.on('world-replaced', this.rebuildViews, this);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.state.events.off('world-replaced', this.rebuildViews, this));
+    this.state.events.on('world-replaced', this.onWorldReplaced, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.state.events.off('world-replaced', this.onWorldReplaced, this));
 
     const save = () => writeSave(this.state.world);
     window.addEventListener('beforeunload', save);
@@ -121,6 +123,16 @@ export class WorldScene extends Phaser.Scene {
       const agent = world.agents.get(id);
       if (agent) this.refreshView(agent, view);
     }
+    const st = terraStage(world.arca);
+    if (st !== this.stage) {
+      this.setStage(st, true);
+      this.state.toast(`O planeta muda: estágio ${PALETTES[st].name}`);
+    }
+    if (this.haze) {
+      this.haze.tilePositionX += realDt * 6;
+      this.haze.tilePositionY += realDt * 2.5;
+    }
+
     this.applyOcclusion();
     this.drawLinks();
     this.drawOverlay();
@@ -130,6 +142,62 @@ export class WorldScene extends Phaser.Scene {
       this.sinceSave = 0;
       if (writeSave(world)) this.state.events.emit('saved');
     }
+  }
+
+  // ---------- terreno e terraformação ----------
+
+  private onWorldReplaced(): void {
+    this.rebuildViews();
+    const st = terraStage(this.state.world.arca);
+    if (st !== this.stage) this.setStage(st, false);
+  }
+
+  /** Redesenha o terreno com a paleta do estágio; com `fade`, a nova paisagem surge por cima da antiga. */
+  private setStage(stage: number, fade: boolean) {
+    const P = PALETTES[stage];
+    const t0 = performance.now();
+    const terr = renderTerrain(this.state.world.map, P, LANDING_POINT);
+    this.perf.terrainMs = Math.round(performance.now() - t0);
+    const key = `terrain-${++this.terrainSeq}`;
+    this.textures.addCanvas(key, terr.canvas);
+    const img = this.add.image(terr.left, terr.top, key).setOrigin(0).setDepth(0.001 * this.terrainSeq);
+    const old = this.terrainImg;
+    const oldKey = old?.texture.key;
+    this.terrainImg = img;
+    const drop = () => {
+      old?.destroy();
+      if (oldKey && this.textures.exists(oldKey)) this.textures.remove(oldKey);
+    };
+    if (fade && old) {
+      img.setAlpha(0);
+      this.tweens.add({ targets: img, alpha: 1, duration: 2500, ease: 'Sine.easeInOut', onComplete: drop });
+    } else drop();
+
+    // Véu de névoa fina (só nos estágios com atmosfera)
+    if (P.haze > 0) {
+      const hk = `haze-${stage}`;
+      if (!this.textures.exists(hk)) this.textures.addCanvas(hk, renderHaze(P));
+      if (!this.haze) {
+        this.haze = this.add.tileSprite(terr.left, terr.top, terr.canvas.width, terr.canvas.height, hk).setOrigin(0).setDepth(1).setBlendMode(Phaser.BlendModes.SCREEN);
+        // recorta o véu no losango do mapa (não vaza para o céu)
+        const m = this.state.world.map;
+        const pts = [toIso(0, 0), toIso(m.width, 0), toIso(m.width, m.height), toIso(0, m.height)];
+        const shape = this.make.graphics({}, false).fillStyle(0xffffff).fillPoints(pts, true);
+        this.haze.setMask(shape.createGeometryMask());
+      } else this.haze.setTexture(hk);
+      const target = P.haze;
+      if (fade) {
+        this.haze.setAlpha(0);
+        this.tweens.add({ targets: this.haze, alpha: target, duration: 2500 });
+      } else this.haze.setAlpha(target);
+    } else if (this.haze) {
+      this.haze.destroy();
+      this.haze = undefined;
+    }
+
+    this.stage = stage;
+    this.state.events.emit('terra-stage', stage, fade);
+    return terr;
   }
 
   // ---------- agentes ----------
