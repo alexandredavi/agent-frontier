@@ -143,7 +143,7 @@ export class UIScene extends Phaser.Scene {
     this.updateArca();
     this.drainEvents();
     const t = Math.floor(w.time);
-    this.footerText.setText(`Agentes: ${w.agents.size} · Cápsula: ${CAPSULE_KW} kW\nTempo de jogo ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`);
+    this.footerText.setText(`Agentes: ${w.agents.size} · Cápsula: ${CAPSULE_KW} kW\nTempo de jogo ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')} · ${Math.round(this.game.loop.actualFps)} FPS`);
   }
 
   // ---------- estoque ----------
