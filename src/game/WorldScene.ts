@@ -3,7 +3,7 @@ import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, INPUT_CYCLES, LINK, RESOURCES, STA
 import { LANDING_POINT } from '../sim/mapData';
 import type { Agent, Connection } from '../sim/types';
 import { CONNECT_ERROR_TEXT, PLACE_ERROR_TEXT } from '../sim/world';
-import { ART_HEIGHT, type ArtType, CORE_OFFSET } from './iso/art';
+import { ART_HEIGHT, type ArtType, CORE_OFFSET, MODULE_SLOTS } from './iso/art';
 import { ANCHOR_X, ANCHOR_Y, FRAMES, FRAME_H, FRAME_W, artKey, bakeArt, frameCount } from './iso/bake';
 import { type Pickable, TH, TW, cellAt, depthOf, footprintAt, isoCircle, pickFrontmost, toIso } from './iso/projection';
 import { PALETTES, renderHaze, renderTerrain, terraStage, visualHeight } from './iso/terrain';
@@ -29,7 +29,21 @@ interface AgentView {
   coreKey: string;
   gx: number;
   gy: number;
+  /** V3: módulos de Diretiva acoplados, giroflex, estado visual e contorno. */
+  modules: Phaser.GameObjects.Image[];
+  modKey: string;
+  beacon: Phaser.GameObjects.Image;
+  modeKey: string;
+  glow?: Phaser.FX.Glow;
+  building: boolean;
+  fxAcc: number;
 }
+
+/** Recorte vertical do quadro: de onde a "impressão" começa (base) até o topo do desenho. */
+const PRINT_BOTTOM = FRAME_H;
+const printTop = (h: number) => Math.max(0, ANCHOR_Y - h - 14);
+/** Zoom a partir do qual os contadores ficam sempre visíveis. */
+const LABEL_ZOOM = 1.2;
 
 const ZOOM_MIN = 0.4;
 const ZOOM_MAX = 1.6;
@@ -57,6 +71,12 @@ export class WorldScene extends Phaser.Scene {
   private dragFrom: number | null = null;
   private downAt = { x: 0, y: 0 };
   private moving: number | null = null;
+  private pinnedId: number | null = null;
+  private hoverId: number | undefined;
+  private frameDt = 0;
+  private sparks!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private smoke!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private dust!: Phaser.GameObjects.Particles.ParticleEmitter;
   private panning = false;
   private sinceSave = 0;
   private lastNow = performance.now();
@@ -81,6 +101,16 @@ export class WorldScene extends Phaser.Scene {
     const terr = this.setStage(terraStage(this.state.world.arca), false);
 
     this.links = this.add.graphics().setDepth(5);
+    // Partículas compartilhadas: faíscas (alerta/demolição), fumaça (alerta) e poeira (construção)
+    this.sparks = this.add
+      .particles(0, 0, 'spark', { emitting: false, lifespan: { min: 250, max: 600 }, speed: { min: 40, max: 150 }, angle: { min: 200, max: 340 }, gravityY: 280, scale: { start: 1, end: 0.2 }, tint: [0xffd27a, 0xff8a3c, 0xffffff], blendMode: 'ADD' })
+      .setDepth(9e5);
+    this.smoke = this.add
+      .particles(0, 0, 'smoke', { emitting: false, lifespan: 1700, speedY: { min: -30, max: -16 }, speedX: { min: -7, max: 7 }, scale: { start: 0.45, end: 1.5 }, alpha: { start: 0.5, end: 0 }, tint: 0x33343a })
+      .setDepth(9e5);
+    this.dust = this.add
+      .particles(0, 0, 'smoke', { emitting: false, lifespan: 750, speed: { min: 25, max: 75 }, angle: { min: 0, max: 360 }, scale: { start: 0.35, end: 1.1 }, alpha: { start: 0.55, end: 0 }, tint: 0xb89274 })
+      .setDepth(9e5);
     this.over = this.add.graphics().setDepth(1e6);
     const tipStyle = { fontFamily: FONT, fontSize: '12px', color: '#ffffff', backgroundColor: '#000000bb', padding: { x: 6, y: 3 } };
     this.tip = this.add.text(0, 0, '', tipStyle).setDepth(1e6 + 1).setVisible(false);
@@ -100,7 +130,11 @@ export class WorldScene extends Phaser.Scene {
     this.state.describeAgent = (a) => this.describe(a);
 
     this.state.events.on('world-replaced', this.onWorldReplaced, this);
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.state.events.off('world-replaced', this.onWorldReplaced, this));
+    this.state.events.on('pin', this.onPin, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.state.events.off('world-replaced', this.onWorldReplaced, this);
+      this.state.events.off('pin', this.onPin, this);
+    });
 
     const save = () => writeSave(this.state.world);
     window.addEventListener('beforeunload', save);
@@ -115,8 +149,14 @@ export class WorldScene extends Phaser.Scene {
     this.state.clock.advance(realDt, (dt) => world.tick(dt));
     if (this.state.clock.speed > 0) this.animClock += realDt * Math.min(2, this.state.clock.speed);
 
-    // Agentes criados/removidos por fora da cena (ex.: import)
-    for (const a of world.agents.values()) if (!this.views.has(a.id)) this.addView(a);
+    this.frameDt = realDt;
+    // Agente sob o cursor (contorno e contadores)
+    const ap = this.input.activePointer;
+    const awp = this.cameras.main.getWorldPoint(ap.x, ap.y);
+    this.hoverId = this.state.isOverUI(ap.x, ap.y) ? undefined : this.agentAtWorld(awp.x, awp.y)?.id;
+
+    // Agentes novos (construídos agora) entram com o drone; removidos saem desmontando
+    for (const a of world.agents.values()) if (!this.views.has(a.id)) this.addView(a, true);
     for (const id of [...this.views.keys()]) if (!world.agents.has(id)) this.removeView(id);
 
     for (const [id, view] of this.views) {
@@ -145,6 +185,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   // ---------- terreno e terraformação ----------
+
+  private onPin(id: number | null): void {
+    this.pinnedId = id;
+  }
 
   private onWorldReplaced(): void {
     this.rebuildViews();
@@ -220,7 +264,7 @@ export class WorldScene extends Phaser.Scene {
     for (const agent of this.state.world.agents.values()) this.addView(agent);
   }
 
-  private addView(agent: Agent): void {
+  private addView(agent: Agent, animate = false): void {
     const t = artType(agent.type);
     const key = artKey(t, agent.resource);
     const p = this.groundOf(agent);
@@ -241,6 +285,12 @@ export class WorldScene extends Phaser.Scene {
       coreKey: '',
       gx: agent.x,
       gy: agent.y,
+      modules: [],
+      modKey: '',
+      beacon: this.add.image(0, -ART_HEIGHT[t] - 6, 'beacon').setVisible(false),
+      modeKey: '',
+      building: false,
+      fxAcc: Math.random() * 0.3,
     };
     if (agent.designId) {
       view.core = this.add.image(CORE_OFFSET.x, CORE_OFFSET.y, 'core-basic');
@@ -252,12 +302,61 @@ export class WorldScene extends Phaser.Scene {
     view.bolt.fillStyle(UI.bad, 1);
     view.bolt.fillTriangle(CORE_OFFSET.x + 17, CORE_OFFSET.y - 21, CORE_OFFSET.x + 12, CORE_OFFSET.y - 13, CORE_OFFSET.x + 16, CORE_OFFSET.y - 13);
     view.bolt.fillTriangle(CORE_OFFSET.x + 15, CORE_OFFSET.y - 7, CORE_OFFSET.x + 20, CORE_OFFSET.y - 15, CORE_OFFSET.x + 16, CORE_OFFSET.y - 15);
-    parts.push(view.bolt, view.label);
+    parts.push(view.bolt, view.beacon, view.label);
     view.container.add(parts);
-    view.container.setScale(0.7).setAlpha(0);
-    this.tweens.add({ targets: view.container, scale: 1, alpha: 1, duration: 180, ease: 'Back.Out' });
     this.views.set(agent.id, view);
     this.refreshView(agent, view);
+    if (animate) this.playBuild(agent, view);
+    else {
+      view.container.setScale(0.7).setAlpha(0);
+      this.tweens.add({ targets: view.container, scale: 1, alpha: 1, duration: 180, ease: 'Back.Out' });
+    }
+  }
+
+  /** Construção: um drone de carga desce e "imprime" o agente de baixo para cima. */
+  private playBuild(agent: Agent, view: AgentView): void {
+    const H = ART_HEIGHT[artType(agent.type)];
+    const top = printTop(H);
+    const extras = view.container.list.filter((o) => o !== view.sprite) as unknown as Phaser.GameObjects.Components.Alpha[];
+    for (const o of extras) o.setAlpha(0);
+    view.building = true;
+    view.sprite.setCrop(0, PRINT_BOTTOM, FRAME_W, 0);
+    const drone = this.add.image(0, -H - 170, 'drone').setAlpha(0);
+    const beam = this.add.graphics();
+    view.container.add([beam, drone]);
+    const g = this.groundOf(agent);
+    this.dust.explode(14, g.x, g.y);
+    const prog = { p: 0 };
+    const hover = -H - 30;
+    this.tweens.chain({
+      tweens: [
+        { targets: drone, y: hover, alpha: 1, duration: 260, ease: 'Cubic.Out' },
+        {
+          targets: prog,
+          p: 1,
+          duration: 620,
+          ease: 'Sine.InOut',
+          onUpdate: () => {
+            const y = PRINT_BOTTOM - prog.p * (PRINT_BOTTOM - top);
+            view.sprite.setCrop(0, y, FRAME_W, FRAME_H - y);
+            const ly = y - ANCHOR_Y;
+            drone.y = hover + Math.sin(prog.p * Math.PI * 4) * 2;
+            beam.clear();
+            beam.fillStyle(0x7fe7ff, 0.18).fillTriangle(0, drone.y + 8, -44, ly, 44, ly);
+            beam.lineStyle(1.5, 0xbff4ff, 0.9).lineBetween(-40, ly, 40, ly);
+          },
+        },
+        { targets: drone, y: -H - 190, alpha: 0, duration: 320, ease: 'Cubic.In', onStart: () => beam.clear() },
+      ],
+      onComplete: () => {
+        drone.destroy();
+        beam.destroy();
+        if (!view.sprite.active) return;
+        view.sprite.setCrop();
+        view.building = false;
+        this.tweens.add({ targets: extras, alpha: 1, duration: 200 });
+      },
+    });
   }
 
   private refreshView(agent: Agent, view: AgentView): void {
@@ -296,6 +395,58 @@ export class WorldScene extends Phaser.Scene {
       if (adv) view.ring!.setRotation(this.animClock * 1.5);
     }
 
+    // Estado no próprio modelo: ocioso apaga as luzes; bloqueado liga o giroflex; alerta solta faíscas e fumaça
+    const stuckNow = agent.status === 'bloqueado' && agent.stalledFor >= STALL_ALERT;
+    const mode = stuckNow ? 'alerta' : agent.status;
+    if (mode !== view.modeKey) {
+      view.modeKey = mode;
+      if (mode === 'ocioso' && agent.designId) view.sprite.setTint(0x6c7280);
+      else view.sprite.clearTint();
+      view.beacon.setVisible(mode === 'bloqueado' || mode === 'alerta').setTint(mode === 'alerta' ? UI.bad : WARN);
+    }
+    if (view.beacon.visible && !view.building) {
+      const t = this.time.now / 1000;
+      view.beacon.setAlpha(0.35 + 0.65 * Math.abs(Math.sin(t * (mode === 'alerta' ? 7 : 4.5))));
+    }
+    if (mode === 'alerta' && !view.building) {
+      view.fxAcc += this.frameDt;
+      if (view.fxAcc > 0.28) {
+        view.fxAcc = 0;
+        const c = view.container;
+        const H = ART_HEIGHT[artType(agent.type)];
+        this.sparks.explode(3, c.x + (Math.random() - 0.5) * 30, c.y - H * 0.45);
+        if (Math.random() < 0.6) this.smoke.explode(1, c.x + (Math.random() - 0.5) * 16, c.y - H * 0.75);
+      }
+    }
+
+    // Módulos de Diretiva acoplados na base
+    const cards = agent.designId ? (w.designOf(agent)?.cards ?? []) : [];
+    const modKey = cards.join(',');
+    if (modKey !== view.modKey) {
+      view.modKey = modKey;
+      for (const m of view.modules) m.destroy();
+      view.modules = cards.slice(0, MODULE_SLOTS.length).map((card, i) => {
+        const img = this.add.image(MODULE_SLOTS[i].x, MODULE_SLOTS[i].y, `mod-${card}`).setOrigin(0.5, 22 / 32);
+        if (view.building) img.setAlpha(0);
+        return img;
+      });
+      // acima do corpo, abaixo do giroflex e do rótulo
+      const at = view.container.getIndex(view.beacon);
+      view.modules.forEach((m, i) => view.container.addAt(m, at + i));
+    }
+
+    // Contorno luminoso no agente sob o cursor ou com cartão fixo
+    const lit = agent.id === this.hoverId || agent.id === this.pinnedId;
+    if (lit && !view.glow && !view.building && view.sprite.preFX) {
+      view.sprite.preFX.padding = 6;
+      view.glow = view.sprite.preFX.addGlow(UI.accent, 3, 0, false, 0.1, 6);
+    }
+    else if ((!lit || view.building) && view.glow) {
+      view.sprite.preFX?.remove(view.glow);
+      if (view.sprite.preFX) view.sprite.preFX.padding = 0;
+      view.glow = undefined;
+    }
+
     // Contorno de bloqueio no chão (âmbar; vermelho depois de STALL_ALERT)
     const statusKey = agent.status === 'bloqueado' ? (agent.stalledFor >= STALL_ALERT ? 'red' : 'amber') : '';
     if (statusKey !== view.statusKey) {
@@ -315,15 +466,37 @@ export class WorldScene extends Phaser.Scene {
     if (def.generates) text = `+${def.generates} kW`;
     if (text !== view.labelKey) {
       view.labelKey = text;
-      view.label.setText(text).setVisible(text !== '');
+      view.label.setText(text);
     }
+    // Contadores só quando úteis: hover, cartão fixo, zoom aproximado, alerta ou Silo cheio
+    const full = agent.type === 'silo' && agent.buffer.length >= (def.capacity ?? Infinity);
+    const show = text !== '' && (lit || this.cameras.main.zoom >= LABEL_ZOOM || full || mode === 'alerta');
+    view.label.setVisible(show).setY(-ART_HEIGHT[artType(agent.type)] - (view.beacon.visible ? 30 : 18));
   }
 
   private removeView(id: number): void {
     const view = this.views.get(id);
     if (!view) return;
     this.views.delete(id);
-    this.tweens.add({ targets: view.container, scale: 0.7, alpha: 0, duration: 140, onComplete: () => view.container.destroy() });
+    // Demolição: o agente desmonta de cima para baixo e some com faíscas
+    const c = view.container;
+    const H = view.sprite.height ? ART_HEIGHT[view.key.startsWith('art-extrator') ? 'extrator' : (view.key.slice(4) as ArtType)] ?? 60 : 60;
+    this.sparks.explode(18, c.x, c.y - H * 0.5);
+    this.dust.explode(8, c.x, c.y);
+    for (const o of c.list) if (o !== view.sprite) (o as unknown as Phaser.GameObjects.Components.Alpha).setAlpha(0);
+    const top = printTop(H);
+    const prog = { p: 0 };
+    this.tweens.add({
+      targets: prog,
+      p: 1,
+      duration: 380,
+      ease: 'Sine.In',
+      onUpdate: () => {
+        const y = top + prog.p * (PRINT_BOTTOM - top);
+        view.sprite.setCrop(0, y, FRAME_W, FRAME_H - y);
+      },
+      onComplete: () => c.destroy(),
+    });
   }
 
   private diamondPts(cx: number, cy: number, w: number, h: number): Phaser.Math.Vector2[] {
@@ -366,8 +539,8 @@ export class WorldScene extends Phaser.Scene {
       const f = this.footprintUnder(wp.x, wp.y);
       const g = this.groundOf(f);
       focus = { id: -1, x: f.x, y: f.y, left: g.x - 64, right: g.x + 64, top: g.y - 70, bottom: g.y + 34 };
-    } else if (!this.state.isOverUI(p.x, p.y)) {
-      const a = this.agentAtWorld(wp.x, wp.y);
+    } else if (this.hoverId !== undefined) {
+      const a = world.agents.get(this.hoverId);
       if (a) focus = this.rectOf(a);
     }
     for (const [id, view] of this.views) {

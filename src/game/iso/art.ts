@@ -433,3 +433,91 @@ export function drawRingArt(c: Ctx): void {
   c.lineWidth = 1.4;
   c.beginPath(); c.ellipse(0, 0, 10, 3.5, 0, 0, TAU); c.stroke();
 }
+
+// ---------- V3: módulos de Diretiva, giroflex, drone e partículas ----------
+
+export type ModuleKind = 'acelerar' | 'cuidadoso' | 'economico' | 'filtrar';
+
+/** Pontos de encaixe dos módulos na face frontal-direita da base (coordenadas do contêiner do agente). */
+export const MODULE_SLOTS: P[] = [-0.62, -0.22, 0.18, 0.58].map((gy) => iso(1.02, gy, 1));
+
+/** Módulo de Diretiva (pequena peça acoplada). (0,0) = ponto de encaixe no chão. */
+export function drawModuleArt(c: Ctx, kind: ModuleKind): void {
+  switch (kind) {
+    case 'acelerar': {
+      // turbina com aletas e bocal
+      box(c, 0, 0, 0.1, 0.13, 0, 8, '#f08a3c');
+      const t = iso(0.1, 0, 4);
+      c.fillStyle = '#2a2f3a'; c.beginPath(); c.ellipse(t.x + 2, t.y + 1, 3.2, 4.2, -0.5, 0, TAU); c.fill();
+      c.fillStyle = '#ffb46b'; c.beginPath(); c.ellipse(t.x + 2, t.y + 1, 1.6, 2.2, -0.5, 0, TAU); c.fill();
+      c.strokeStyle = '#ffd6a8'; c.lineWidth = 1;
+      for (let k = 0; k < 3; k++) { const a = iso(-0.08, -0.1 + k * 0.1, 8), b = iso(-0.08, -0.1 + k * 0.1, 12); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
+      break;
+    }
+    case 'cuidadoso': {
+      // lente/escudo azul
+      box(c, 0, 0, 0.1, 0.12, 0, 7, '#3a5a86');
+      const t = iso(0.1, 0, 5);
+      sphere(c, t.x + 2, t.y, 4.2, '#7fd3ff');
+      c.fillStyle = 'rgba(255,255,255,0.8)'; c.beginPath(); c.arc(t.x + 0.8, t.y - 1.4, 1.2, 0, TAU); c.fill();
+      break;
+    }
+    case 'economico': {
+      // bateria verde com carga
+      const top = frustum(c, 0, 0, 0.1, 0.1, 0, 11, '#3fbf6a', '#9df2b8');
+      c.fillStyle = '#d7f5e1'; c.fillRect(top.x - 1.2, top.y - 3, 2.4, 2.4);
+      c.fillStyle = 'rgba(10,40,20,0.55)';
+      for (let k = 0; k < 3; k++) c.fillRect(top.x - 3, top.y + 3 + k * 2.4, 5, 1.2);
+      break;
+    }
+    case 'filtrar': {
+      // grade de filtro
+      const b = box(c, 0, 0, 0.1, 0.13, 0, 9, '#b8c0cc');
+      c.strokeStyle = 'rgba(30,35,45,0.8)'; c.lineWidth = 0.9;
+      for (let k = 1; k < 4; k++) {
+        const a = iso(0.1, -0.13 + k * 0.065, 1.5), q = iso(0.1, -0.13 + k * 0.065, 8);
+        c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(q.x, q.y); c.stroke();
+      }
+      c.fillStyle = '#e8d36a'; c.fillRect(b.A.x - 1, b.A.y - 1, 2.5, 2.5);
+      break;
+    }
+  }
+}
+
+/** Giroflex (luz de alerta) branco, para ser tingido: âmbar = bloqueado, vermelho = alerta. */
+export function drawBeaconArt(c: Ctx): void {
+  glow(c, 0, -4, 16, 'rgba(255,255,255,0.95)', 0.7);
+  c.fillStyle = '#2a2f3a'; c.beginPath(); c.ellipse(0, 3, 6, 3, 0, 0, TAU); c.fill();
+  c.fillStyle = '#e8e8e8';
+  c.beginPath(); c.ellipse(0, 2, 5, 2.5, 0, 0, Math.PI); c.ellipse(0, 2, 5, 7, 0, Math.PI, 0); c.closePath(); c.fill();
+  c.fillStyle = 'rgba(255,255,255,0.95)'; c.beginPath(); c.ellipse(-1.6, -2, 1.4, 2.4, 0, 0, TAU); c.fill();
+}
+
+/** Drone de carga que "imprime" os agentes novos. */
+export function drawDroneArt(c: Ctx): void {
+  c.globalAlpha = 0.25; c.fillStyle = '#9ff'; c.beginPath(); c.ellipse(0, 10, 10, 3, 0, 0, TAU); c.fill(); c.globalAlpha = 1;
+  const arms: [number, number][] = [[-0.42, -0.42], [0.42, -0.42], [-0.42, 0.42], [0.42, 0.42]];
+  for (const [gx, gy] of arms) rod(c, iso(0, 0, 4), iso(gx, gy, 6), 2.4, '#8b93a3');
+  box(c, 0, 0, 0.2, 0.2, 0, 7, '#d9dee6');
+  const eye = iso(0.2, 0.2, 3);
+  c.fillStyle = '#ffb347'; c.beginPath(); c.arc(eye.x, eye.y, 1.8, 0, TAU); c.fill();
+  for (const [gx, gy] of arms) {
+    const p = iso(gx, gy, 7);
+    c.fillStyle = 'rgba(200,230,255,0.35)'; c.beginPath(); c.ellipse(p.x, p.y, 8, 3.4, 0, 0, TAU); c.fill();
+    c.strokeStyle = 'rgba(230,245,255,0.6)'; c.lineWidth = 0.8; c.stroke();
+    c.fillStyle = '#4a5160'; c.beginPath(); c.arc(p.x, p.y, 1.4, 0, TAU); c.fill();
+  }
+  // garra
+  const under = iso(0, 0, 0);
+  c.strokeStyle = '#6b7385'; c.lineWidth = 1.4;
+  c.beginPath(); c.moveTo(under.x - 3, under.y); c.lineTo(under.x - 4, under.y + 5); c.moveTo(under.x + 3, under.y); c.lineTo(under.x + 4, under.y + 5); c.stroke();
+}
+
+/** Faísca (ponto brilhante alongado) e fumaça (borrão macio), ambos brancos para tingir. */
+export function drawSparkArt(c: Ctx): void {
+  glow(c, 0, 0, 5, 'rgba(255,255,255,1)', 1);
+  c.fillStyle = '#fff'; c.beginPath(); c.arc(0, 0, 1.4, 0, TAU); c.fill();
+}
+export function drawSmokeArt(c: Ctx): void {
+  glow(c, 0, 0, 14, 'rgba(255,255,255,0.9)', 0.55);
+}

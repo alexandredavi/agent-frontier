@@ -1,5 +1,5 @@
 import type Phaser from 'phaser';
-import { type ArtType, PERIOD, drawAgentArt, drawCoreArt, drawRingArt } from './art';
+import { type ArtType, type ModuleKind, PERIOD, drawAgentArt, drawBeaconArt, drawCoreArt, drawDroneArt, drawModuleArt, drawRingArt, drawSmokeArt, drawSparkArt } from './art';
 
 /** Tamanho de cada quadro e âncora (centro do chão do agente dentro do quadro). */
 export const FRAME_W = 176;
@@ -81,5 +81,10 @@ export function bakeArt(scene: Phaser.Scene): { ms: number; mb: number } {
   small(scene, 'core-basic', 40, (c) => drawCoreArt(c, false));
   small(scene, 'core-adv', 60, (c) => drawCoreArt(c, true));
   small(scene, 'core-ring', 28, (c) => drawRingArt(c));
+  for (const m of ['acelerar', 'cuidadoso', 'economico', 'filtrar'] as ModuleKind[]) small(scene, `mod-${m}`, 32, (c) => { c.translate(0, 6); drawModuleArt(c, m); });
+  small(scene, 'beacon', 36, (c) => drawBeaconArt(c));
+  small(scene, 'drone', 56, (c) => drawDroneArt(c));
+  small(scene, 'spark', 12, (c) => drawSparkArt(c));
+  small(scene, 'smoke', 32, (c) => drawSmokeArt(c));
   return { ms: Math.round(performance.now() - t0), mb: Math.round(bytes / 1024 / 1024) };
 }
