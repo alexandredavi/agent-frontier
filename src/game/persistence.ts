@@ -2,6 +2,7 @@ import type { GameMap } from '../sim/map';
 import { deserialize, serialize } from '../sim/save';
 import type { World } from '../sim/world';
 import { ARCA_PHASES } from '../sim/defs';
+import { performanceSummary } from './telemetry';
 
 /** Save único das versões antigas (descartado: os 10 espaços começam do zero). */
 const LEGACY_KEY = 'agent-frontier:save:v1';
@@ -204,6 +205,10 @@ export function exportDiary(world: World): void {
       agentes: world.agents.size,
       versoesCriadas: [...world.designs.values()].filter((d) => !d.factory).length,
       tutorial: world.tutorial,
+      semente: world.diary.seed ?? null,
+      sessoes: world.diary.sessions?.length ?? 0,
+      ultimaSessao: world.diary.sessions?.at(-1) ?? null,
+      desempenho: performanceSummary(world),
     },
     diario: world.diary,
   };
