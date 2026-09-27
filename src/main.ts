@@ -5,6 +5,7 @@ import { UIScene } from './game/UIScene';
 import { GameState } from './game/state';
 import { clearLegacySave, exportDiary, importSave, lastSlot, loadSlot, setCurrentSlot, setLastSlot, writeSave, writeSlot } from './game/persistence';
 import { makeThumb } from './game/thumb';
+import { DiaryFps, gpuName, recordSession } from './game/telemetry';
 import { GameMap } from './sim/map';
 import { MAP_ROWS } from './sim/mapData';
 import { World } from './sim/world';
@@ -78,6 +79,33 @@ const game = new Phaser.Game({
   scene: [new SkyScene(state), new WorldScene(state), new UIScene(state)],
 });
 state.setMode('title');
+
+// Diário: registra navegador, tela, GPU e variante do tutorial a cada entrada no jogo (uma vez por mundo por carregamento da página)
+const sessionLogged = new WeakSet<World>();
+state.events.on('mode', (mode: string) => {
+  const w = state.world;
+  if (mode !== 'play' || sessionLogged.has(w)) return;
+  sessionLogged.add(w);
+  const gl = (game.renderer as { gl?: WebGLRenderingContext }).gl;
+  recordSession(w, {
+    userAgent: navigator.userAgent,
+    screen: { width: screen.width, height: screen.height },
+    viewport: { width: innerWidth, height: innerHeight },
+    dpr: devicePixelRatio || 1,
+    gpu: gpuName(gl),
+    search: location.search,
+  });
+});
+
+// Diário: FPS médio e pior segundo por minuto de jogo (só durante o jogo; a aba em segundo plano não conta)
+const diaryFps = new DiaryFps();
+let lastFrame = performance.now();
+game.events.on(Phaser.Core.Events.POST_STEP, () => {
+  // Tempo real entre quadros (o delta do Phaser é suavizado e esconderia as quedas)
+  const now = performance.now();
+  diaryFps.update(state.world, state.mode === 'play' ? (now - lastFrame) / 1000 : null);
+  lastFrame = now;
+});
 
 // Exposto para depuração no console do navegador: agentFrontier.state.world
 (window as unknown as { agentFrontier: unknown }).agentFrontier = { state, game };

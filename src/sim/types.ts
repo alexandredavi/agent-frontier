@@ -135,6 +135,25 @@ export interface ArcaState {
   done: boolean;
 }
 
+/** Ambiente de uma sessão de jogo, registrado cada vez que o jogador entra no jogo (Novo jogo, Continuar, Carregar). */
+export interface DiarySession {
+  /** Quando a sessão começou (ISO). */
+  startedAt: string;
+  /** Tempo de jogo no início da sessão (s). */
+  gameTime: number;
+  /** Ex.: "Chrome 141", "Firefox 131", "Safari 18". */
+  browser: string;
+  os: string;
+  /** Tela e janela em px CSS, ex.: "1920x1080". */
+  screen: string;
+  viewport: string;
+  dpr: number;
+  /** Placa de vídeo informada pelo WebGL (vazio se o navegador esconder). */
+  gpu: string;
+  /** Variante do tutorial (?tut=b na URL; padrão "a"). */
+  tutorial: string;
+}
+
 /** Diário de sessão para o playtest (fica no save, no navegador). */
 export interface Diary {
   /** Início da sessão (ISO). */
@@ -144,8 +163,13 @@ export interface Diary {
   counts: Record<string, number>;
   /** Semente inicial do RNG do mundo (uint32); ausente em saves antigos e mundos de teste. */
   seed?: number;
-  /** Amostra a cada minuto de jogo. */
-  samples: { game: number; agents: number; blocked: number; power: number; stock: number; defects: number }[];
+  /** Sessões de jogo (navegador, tela, GPU, variante do tutorial); ausente em saves antigos. */
+  sessions?: DiarySession[];
+  /**
+   * Amostra a cada minuto de jogo. `fps`/`fpsMin`: FPS médio e o pior segundo desde a amostra anterior,
+   * gravados pela interface (src/game/telemetry.ts); ausentes nos testes e em saves antigos.
+   */
+  samples: { game: number; agents: number; blocked: number; power: number; stock: number; defects: number; fps?: number; fpsMin?: number }[];
 }
 
 /** Tutorial da MERIDIAN: passo atual (índice) ou encerrado. */
