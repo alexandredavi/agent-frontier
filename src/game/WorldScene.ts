@@ -3,11 +3,10 @@ import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, INPUT_CYCLES, LINK, RESOURCES, STA
 import { LANDING_POINT } from '../sim/mapData';
 import type { Agent, Connection } from '../sim/types';
 import { CONNECT_ERROR_TEXT, PLACE_ERROR_TEXT } from '../sim/world';
-import { ART_HEIGHT, type ArtType, CORE_OFFSET, MODULE_SLOTS } from './iso/art';
+import { ART_HEIGHT, type ArtType, CORE_OFFSET, MODULE_SLOTS, PERIOD } from './iso/art';
 import { ANCHOR_X, ANCHOR_Y, FRAMES, FRAME_H, FRAME_W, artKey, bakeArt, frameCount } from './iso/bake';
 import { type Pickable, TH, TW, cellAt, depthOf, footprintAt, isoCircle, pickFrontmost, toIso } from './iso/projection';
 import { PALETTES, renderHaze, renderTerrain, terraStage, visualHeight } from './iso/terrain';
-import { drawItem } from './icons';
 import { writeSave } from './persistence';
 import type { GameState } from './state';
 import { FONT, RESOURCE_COLOR, UI, WARN } from './theme';
@@ -37,6 +36,21 @@ interface AgentView {
   glow?: Phaser.FX.Glow;
   building: boolean;
   fxAcc: number;
+  /** V4: efeitos de trabalho (vapor, fagulhas, impacto da prensa). */
+  workAcc: number;
+  lastPh: number;
+}
+
+/** Esteira: altura acima do chão e meia-largura (em células). */
+const BELT_Z = 16;
+const BELT_W = 0.25;
+const STRIPE = 0.45;
+/** Uma linha é considerada parada quando o item da frente espera na ponta por mais que isto (s). */
+const STUCK_AFTER = 1;
+
+function darken(col: number, f: number): number {
+  const r = (col >> 16) & 255, g = (col >> 8) & 255, b = col & 255;
+  return (Math.round(r * f) << 16) | (Math.round(g * f) << 8) | Math.round(b * f);
 }
 
 /** Recorte vertical do quadro: de onde a "impressão" começa (base) até o topo do desenho. */
@@ -65,6 +79,21 @@ const artType = (t: Agent['type']): ArtType => t as ArtType;
 export class WorldScene extends Phaser.Scene {
   private views = new Map<number, AgentView>();
   private links!: Phaser.GameObjects.Graphics;
+  private linkGlow!: Phaser.GameObjects.Graphics;
+  private beltOffset = new Map<number, number>();
+  private stuckFor = new Map<number, number>();
+  private steam!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private ambDust!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private ambMist!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private iceGlint!: Phaser.GameObjects.Particles.ParticleEmitter;
+  private craterPts: { x: number; y: number }[] = [];
+  private ambAcc = { dust: 0, ice: 0, mist: 0 };
+  private fpsLow = 0;
+  private fpsHigh = 0;
+  /** Efeitos de ambiente e de trabalho ligados (desligam sozinhos se o FPS cair). */
+  fxOn = true;
+  /** 'auto' segue o FPS; 'on'/'off' forçam (depuração). */
+  fxMode: 'auto' | 'on' | 'off' = 'auto';
   private over!: Phaser.GameObjects.Graphics;
   private tip!: Phaser.GameObjects.Text;
   private info!: Phaser.GameObjects.Text;
@@ -101,6 +130,20 @@ export class WorldScene extends Phaser.Scene {
     const terr = this.setStage(terraStage(this.state.world.arca), false);
 
     this.links = this.add.graphics().setDepth(5);
+    this.linkGlow = this.add.graphics().setDepth(5.5).setBlendMode(Phaser.BlendModes.ADD);
+    this.steam = this.add
+      .particles(0, 0, 'smoke', { emitting: false, lifespan: 1700, speedY: { min: -32, max: -18 }, speedX: { min: -5, max: 9 }, scale: { start: 0.3, end: 1.3 }, alpha: { start: 0.42, end: 0 }, tint: 0xe8eef5 })
+      .setDepth(9e5);
+    this.ambDust = this.add
+      .particles(0, 0, 'smoke', { emitting: false, lifespan: 4200, speedX: { min: 28, max: 70 }, speedY: { min: -6, max: 8 }, scale: { start: 0.1, end: 0.34 }, alpha: { values: [0, 0.42, 0], interpolation: 'linear' }, tint: 0xc9a07f })
+      .setDepth(9e5 - 1);
+    this.ambMist = this.add
+      .particles(0, 0, 'smoke', { emitting: false, lifespan: 7000, speedX: { min: 6, max: 16 }, speedY: { min: -2, max: 2 }, scale: { start: 2.2, end: 3.6 }, alpha: { values: [0, 0.09, 0], interpolation: 'linear' }, tint: 0xe0925a })
+      .setDepth(9e5 - 2);
+    this.iceGlint = this.add
+      .particles(0, 0, 'spark', { emitting: false, lifespan: 700, speed: 0, scale: { values: [0, 1.2, 0], interpolation: 'linear' }, tint: 0xe6f8ff, blendMode: 'ADD' })
+      .setDepth(2);
+    this.collectCraters();
     // Partículas compartilhadas: faíscas (alerta/demolição), fumaça (alerta) e poeira (construção)
     this.sparks = this.add
       .particles(0, 0, 'spark', { emitting: false, lifespan: { min: 250, max: 600 }, speed: { min: 40, max: 150 }, angle: { min: 200, max: 340 }, gravityY: 280, scale: { start: 1, end: 0.2 }, tint: [0xffd27a, 0xff8a3c, 0xffffff], blendMode: 'ADD' })
@@ -173,6 +216,8 @@ export class WorldScene extends Phaser.Scene {
       this.haze.tilePositionY += realDt * 2.5;
     }
 
+    this.updateFxBudget(realDt);
+    this.ambient(realDt);
     this.applyOcclusion();
     this.drawLinks();
     this.drawOverlay();
@@ -192,6 +237,9 @@ export class WorldScene extends Phaser.Scene {
 
   private onWorldReplaced(): void {
     this.rebuildViews();
+    this.collectCraters();
+    this.beltOffset.clear();
+    this.stuckFor.clear();
     const st = terraStage(this.state.world.arca);
     if (st !== this.stage) this.setStage(st, false);
   }
@@ -291,6 +339,8 @@ export class WorldScene extends Phaser.Scene {
       modeKey: '',
       building: false,
       fxAcc: Math.random() * 0.3,
+      workAcc: Math.random() * 0.3,
+      lastPh: 0,
     };
     if (agent.designId) {
       view.core = this.add.image(CORE_OFFSET.x, CORE_OFFSET.y, 'core-basic');
@@ -380,6 +430,7 @@ export class WorldScene extends Phaser.Scene {
       if (view.sprite.frame.name !== String(f)) view.sprite.setFrame(f);
     }
     view.bolt.setVisible(working && w.power.factor < 1);
+    if (working && this.fxOn && !view.building && this.state.clock.speed > 0) this.workFx(agent, view);
 
     // Núcleo: cor = estado; Avançado = esfera maior + anel girando
     if (view.core) {
@@ -574,28 +625,189 @@ export class WorldScene extends Phaser.Scene {
 
   private drawLinks(): void {
     const g = this.links;
+    const glow = this.linkGlow;
     const world = this.state.world;
     g.clear();
+    glow.clear();
     const hovered = this.hoveredConnectionId();
+    const t = this.time.now / 1000;
+    const speed = this.state.clock.speed;
     for (const c of world.connections.values()) {
-      const { a, b, kind } = this.linkEnds(c);
+      // Linha parada: o item da frente chegou na ponta e não foi aceito
+      const front = c.items[0];
+      const waiting = !!front && front.pos >= c.length - 0.02;
+      const sf = waiting && speed > 0 ? (this.stuckFor.get(c.id) ?? 0) + this.frameDt : waiting ? (this.stuckFor.get(c.id) ?? 0) : 0;
+      this.stuckFor.set(c.id, sf);
+      const stuck = sf >= STUCK_AFTER;
       const hot = c.id === hovered;
-      if (kind === 'materia') {
-        g.lineStyle(10, 0x000000, 0.3).lineBetween(a.x + 5, a.y + 18, b.x + 5, b.y + 18);
-        g.lineStyle(8, hot ? UI.bad : 0x4b5567, 1).lineBetween(a.x, a.y, b.x, b.y);
-        g.lineStyle(2.5, hot ? 0xfca5a5 : 0x6b7689, 1).lineBetween(a.x, a.y - 2, b.x, b.y - 2);
-      } else {
-        g.lineStyle(8, hot ? UI.bad : 0x5ec8ff, 0.16).lineBetween(a.x, a.y, b.x, b.y);
-        g.lineStyle(1.8, hot ? UI.bad : 0x7dd3fc, 0.9).lineBetween(a.x, a.y, b.x, b.y);
+      if (this.linkKind(c) === 'materia') {
+        const off = (this.beltOffset.get(c.id) ?? 0) + (stuck ? 0 : this.frameDt * LINK.speed * speed);
+        this.beltOffset.set(c.id, off % 1000);
+        this.drawBelt(c, hot, stuck, off, t);
+      } else this.drawBeam(c, hot, stuck, t);
+    }
+    // limpa conexões removidas
+    if (this.stuckFor.size > world.connections.size) {
+      for (const id of [...this.stuckFor.keys()]) if (!world.connections.has(id)) { this.stuckFor.delete(id); this.beltOffset.delete(id); }
+    }
+  }
+
+  /** Esteira aberta em 3D sobre pilares; as faixas andam no sentido do fluxo. */
+  private drawBelt(c: Connection, hot: boolean, stuck: boolean, offset: number, time: number): void {
+    const g = this.links;
+    const w = this.state.world;
+    const A = w.agents.get(c.from)!, B = w.agents.get(c.to)!;
+    const ax = A.x + AGENT_SIZE / 2, ay = A.y + AGENT_SIZE / 2, bx = B.x + AGENT_SIZE / 2, by = B.y + AGENT_SIZE / 2;
+    const ga = this.baseZ(A), gb = this.baseZ(B);
+    const za = ga + BELT_Z, zb = gb + BELT_Z;
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+    const px = (-dy / len) * BELT_W, py = (dx / len) * BELT_W;
+    const P = (tt: number, s: number, dz = 0) => toIso(ax + dx * tt + px * s, ay + dy * tt + py * s, za + (zb - za) * tt + dz);
+    const G = (tt: number, s = 0, o = 0) => toIso(ax + dx * tt + px * s + o, ay + dy * tt + py * s + o, ga + (gb - ga) * tt);
+    // sombra no chão
+    g.fillStyle(0x000000, 0.2).fillPoints([G(0, -1, 0.18), G(1, -1, 0.18), G(1, 1, 0.18), G(0, 1, 0.18)], true);
+    // pilares
+    const n = Math.max(1, Math.floor(len / 2.2));
+    for (let i = 1; i <= n; i++) {
+      const tt = i / (n + 1);
+      const top = P(tt, 0, -3), bot = G(tt);
+      g.lineStyle(3, 0x262b36, 1).lineBetween(top.x, top.y, bot.x, bot.y);
+      g.fillStyle(0x000000, 0.25).fillEllipse(bot.x, bot.y, 8, 4);
+    }
+    // lateral da frente e topo
+    const sF = P(0.5, 1).y > P(0.5, -1).y ? 1 : -1;
+    g.fillStyle(0x1c212b, 1).fillPoints([P(0, sF), P(1, sF), P(1, sF, -6), P(0, sF, -6)], true);
+    g.fillStyle(stuck ? 0x5a4a2c : 0x485266, 1).fillPoints([P(0, -1), P(1, -1), P(1, 1), P(0, 1)], true);
+    // faixas que andam (param quando a linha trava)
+    g.lineStyle(1.3, stuck ? 0x9a7630 : 0x6e7b93, 1);
+    for (let d = offset % STRIPE; d < len; d += STRIPE) {
+      const a = P(d / len, -0.8), b = P(d / len, 0.8);
+      g.lineBetween(a.x, a.y, b.x, b.y);
+    }
+    // trilhos
+    const rail = hot ? UI.bad : stuck ? WARN : 0x8e99ad;
+    for (const sd of [-1, 1]) {
+      const a = P(0, sd, 1), b = P(1, sd, 1);
+      g.lineStyle(1.6, rail, 1).lineBetween(a.x, a.y, b.x, b.y);
+    }
+    // itens: blocos 3D na cor do recurso; defeituosos tremulam em vermelho
+    for (const item of c.items) {
+      const tt = c.length > 0 ? Math.min(1, item.pos / c.length) : 1;
+      const p = P(tt, 0, 1);
+      const col = RESOURCE_COLOR[item.res];
+      const hw = 6, hh = 3, h = 6;
+      g.fillStyle(darken(col, 0.72), 1).fillPoints([{ x: p.x - hw, y: p.y - h }, { x: p.x, y: p.y + hh - h }, { x: p.x, y: p.y + hh }, { x: p.x - hw, y: p.y }], true);
+      g.fillStyle(darken(col, 0.52), 1).fillPoints([{ x: p.x, y: p.y + hh - h }, { x: p.x + hw, y: p.y - h }, { x: p.x + hw, y: p.y }, { x: p.x, y: p.y + hh }], true);
+      g.fillStyle(col, 1).fillPoints([{ x: p.x, y: p.y - hh - h }, { x: p.x + hw, y: p.y - h }, { x: p.x, y: p.y + hh - h }, { x: p.x - hw, y: p.y - h }], true);
+      if (item.bad) this.badGlow(p.x, p.y - 4, time, item.pos);
+    }
+  }
+
+  /** Link de dados: feixe translúcido reto com pulsos de luz viajando. */
+  private drawBeam(c: Connection, hot: boolean, stuck: boolean, time: number): void {
+    const g = this.links;
+    const glow = this.linkGlow;
+    const { a, b } = this.linkEnds(c);
+    const col = hot ? UI.bad : stuck ? WARN : 0x5ec8ff;
+    glow.lineStyle(9, col, 0.09).lineBetween(a.x, a.y, b.x, b.y);
+    glow.lineStyle(3, col, 0.22).lineBetween(a.x, a.y, b.x, b.y);
+    g.lineStyle(1.2, hot ? 0xfca5a5 : stuck ? 0xfde68a : 0xbfeaff, 0.85).lineBetween(a.x, a.y, b.x, b.y);
+    for (const e of [a, b]) {
+      glow.fillStyle(col, 0.35).fillCircle(e.x, e.y, 6);
+      g.fillStyle(0xe0f5ff, 0.9).fillCircle(e.x, e.y, 2);
+    }
+    const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
+    if (c.items.length === 0) {
+      // sem itens: um chevron fraco mostra o sentido
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, s = 5;
+      g.fillStyle(0xcbd5e1, 0.5).fillTriangle(mx + ux * s, my + uy * s, mx - ux * s - uy * s, my - uy * s + ux * s, mx - ux * s + uy * s, my - uy * s - ux * s);
+    }
+    for (const item of c.items) {
+      const tt = c.length > 0 ? Math.min(1, item.pos / c.length) : 1;
+      const x = a.x + (b.x - a.x) * tt, y = a.y + (b.y - a.y) * tt;
+      const rc = RESOURCE_COLOR[item.res];
+      glow.lineStyle(6, rc, 0.55).lineBetween(x - ux * 8, y - uy * 8, x + ux * 3, y + uy * 3);
+      g.fillStyle(0xffffff, 0.95).fillCircle(x, y, 2.2);
+      if (item.bad) this.badGlow(x, y, time, item.pos);
+    }
+  }
+
+  private badGlow(x: number, y: number, time: number, seed: number): void {
+    const f = 0.35 + 0.35 * Math.sin(time * 18 + seed * 7) + 0.2 * Math.sin(time * 31 + seed);
+    this.linkGlow.fillStyle(UI.bad, Math.max(0.15, f)).fillCircle(x, y, 9);
+  }
+
+  // ---------- efeitos de ambiente e de trabalho ----------
+
+  private collectCraters(): void {
+    const m = this.state.world.map;
+    this.craterPts = [];
+    for (let y = 0; y < m.height; y++) for (let x = 0; x < m.width; x++) if (m.terrainAt(x, y) === 'cratera') this.craterPts.push(toIso(x + 0.5, y + 0.5, -7));
+  }
+
+  /** Liga/desliga os efeitos conforme o FPS (desliga abaixo de 28 por 3 s; religa acima de 50 por 5 s). */
+  private updateFxBudget(dt: number): void {
+    if (this.fxMode !== 'auto') {
+      this.fxOn = this.fxMode === 'on';
+      return;
+    }
+    const fps = this.game.loop.actualFps;
+    this.fpsLow = fps < 28 ? this.fpsLow + dt : 0;
+    this.fpsHigh = fps > 50 ? this.fpsHigh + dt : 0;
+    if (this.fxOn && this.fpsLow > 3) this.fxOn = false;
+    else if (!this.fxOn && this.fpsHigh > 5) this.fxOn = true;
+  }
+
+  /** Poeira ao vento (mais forte no Pouso), brilhos de gelo nas crateras e névoa baixa na Base. */
+  private ambient(dt: number): void {
+    if (!this.fxOn) return;
+    const v = this.cameras.main.worldView;
+    const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+    const dustEvery = [0.07, 0.12, 0.25][this.stage] ?? 0.12;
+    this.ambAcc.dust += dt;
+    while (this.ambAcc.dust > dustEvery) {
+      this.ambAcc.dust -= dustEvery;
+      this.ambDust.explode(1, rnd(v.left - 80, v.right), rnd(v.top, v.bottom));
+    }
+    this.ambAcc.ice += dt;
+    if (this.ambAcc.ice > 0.1 && this.craterPts.length) {
+      this.ambAcc.ice = 0;
+      for (let k = 0; k < 3; k++) {
+        const p = this.craterPts[Math.floor(Math.random() * this.craterPts.length)];
+        if (v.contains(p.x, p.y)) { this.iceGlint.explode(1, p.x + rnd(-20, 20), p.y + rnd(-8, 8)); break; }
       }
-      // seta de direção no meio
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-      const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d, s = 6;
-      g.fillStyle(hot ? UI.bad : 0xcbd5e1, 0.9).fillTriangle(mx + ux * s, my + uy * s, mx - ux * s - uy * s, my - uy * s + ux * s, mx - ux * s + uy * s, my - uy * s - ux * s);
-      for (const item of c.items) {
-        const t = c.length > 0 ? item.pos / c.length : 1;
-        drawItem(g, item.res, a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, 4.5, RESOURCE_COLOR[item.res]);
+    }
+    if (this.stage >= 2) {
+      this.ambAcc.mist += dt;
+      if (this.ambAcc.mist > 0.35) {
+        this.ambAcc.mist = 0;
+        this.ambMist.explode(1, rnd(v.left - 150, v.right), rnd(v.top, v.bottom));
+      }
+    }
+  }
+
+  /** Vapor no Derretedor, fagulhas no Fundidor, impacto na Prensa (em sincronia com o martelo). */
+  private workFx(agent: Agent, view: AgentView): void {
+    const c = view.container;
+    view.workAcc += this.frameDt;
+    switch (agent.type) {
+      case 'derretedor':
+        if (view.workAcc > 0.32) { view.workAcc = 0; this.steam.explode(1, c.x + 18, c.y - 68); }
+        break;
+      case 'fundidor':
+        if (view.workAcc > 0.18) { view.workAcc = 0; this.sparks.explode(2, c.x + (Math.random() - 0.5) * 12, c.y - 48); }
+        break;
+      case 'prensa': {
+        const f = (Math.floor(this.animClock * ANIM_FPS) + view.phase) % view.frames;
+        const ph = (((f / FRAMES) * PERIOD * 2) / PERIOD) % 1;
+        const hit = (view.lastPh < 0.18 && ph >= 0.18) || (view.lastPh > ph && ph >= 0.18);
+        view.lastPh = ph;
+        if (hit) {
+          this.dust.explode(6, c.x, c.y - 10);
+          this.sparks.explode(4, c.x, c.y - 16);
+        }
+        break;
       }
     }
   }
