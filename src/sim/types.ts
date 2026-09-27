@@ -148,9 +148,14 @@ export interface Diary {
   samples: { game: number; agents: number; blocked: number; power: number; stock: number; defects: number }[];
 }
 
-/** Tutorial da MERIDIAN: passo atual (índice) ou encerrado. */
+/** Variante do tutorial para o A/B do playtest: "a" = ordem padrão; "b" = Verificador antes da bancada. */
+export type TutorialVariant = 'a' | 'b';
+
+/** Tutorial da MERIDIAN: passo atual (índice na ordem da variante) ou encerrado. */
 export interface TutorialState {
   step: number;
   skipped: boolean;
   done: boolean;
+  /** Ausente = "a". Escolhida no Novo jogo e guardada no save: continuar a partida mantém a ordem. */
+  variant?: TutorialVariant;
 }

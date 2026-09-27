@@ -2,7 +2,7 @@ import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, BIOME_PENALTY, CAPSULE_KW, DRIFT_P
 import { BASE_RELIABILITY, type Design, type DesignStats, MACHINE_ROLES, designStats, factoryDesign, factoryId, isMachine } from './designs';
 import type { GameMap } from './map';
 import { Rng } from './rng';
-import type { Agent, AgentType, ArcaState, Connection, Diary, Item, PowerState, ResourceId, TutorialState } from './types';
+import type { Agent, AgentType, ArcaState, Connection, Diary, Item, PowerState, ResourceId, TutorialState, TutorialVariant } from './types';
 
 export type PlaceError = 'fora-do-mapa' | 'sinal-fraco' | 'terreno' | 'ocupado' | 'sem-no' | 'nos-misturados' | 'bloqueado';
 
@@ -76,6 +76,23 @@ export function newDiary(): Diary {
 
 /** Passos do tutorial da MERIDIAN (o texto fica na interface). */
 export const TUTORIAL_STEPS = ['sensor', 'cartografo', 'conectar', 'plataforma', 'entregar', 'bancada', 'verificador'] as const;
+export type TutorialStep = (typeof TUTORIAL_STEPS)[number];
+
+/** Ordem dos passos por variante (A/B do playtest). A = TUTORIAL_STEPS; B = filtrar alucinações antes de testar na Oficina. */
+export const TUTORIAL_ORDER: Record<TutorialVariant, readonly TutorialStep[]> = {
+  a: TUTORIAL_STEPS,
+  b: ['sensor', 'cartografo', 'conectar', 'plataforma', 'entregar', 'verificador', 'bancada'],
+};
+
+/** Passos do tutorial na ordem da variante dele. */
+export function tutorialSteps(t: TutorialState | null): readonly TutorialStep[] {
+  return TUTORIAL_ORDER[t?.variant ?? 'a'];
+}
+
+/** Variante pedida na query string da página (`?tut=b`); qualquer outra coisa é a padrão. */
+export function tutorialVariantFromSearch(search: string): TutorialVariant {
+  return new URLSearchParams(search).get('tut')?.toLowerCase() === 'b' ? 'b' : 'a';
+}
 
 export class World {
   readonly agents = new Map<number, Agent>();
@@ -211,6 +228,11 @@ export class World {
     if (this.diary.samples.length > 600) this.diary.samples.shift();
   }
 
+  /** Depois de carregar um save: a próxima amostra do Diário cai no próximo minuto cheio (sem amostra extra ao carregar). */
+  syncDiaryClock(): void {
+    this.nextSample = Math.floor(this.time / 60) * 60 + 60;
+  }
+
   // ---------- tutorial ----------
 
   /** Avança o tutorial quando a condição do passo atual é cumprida. */
@@ -220,7 +242,7 @@ export class World {
     const has = (type: AgentType) => [...this.agents.values()].some((a) => a.type === type);
     const linked = (from: AgentType, to: AgentType) =>
       [...this.connections.values()].some((c) => this.agents.get(c.from)?.type === from && this.agents.get(c.to)?.type === to);
-    const conds: Record<(typeof TUTORIAL_STEPS)[number], () => boolean> = {
+    const conds: Record<TutorialStep, () => boolean> = {
       sensor: () => has('sensor'),
       cartografo: () => has('cartografo'),
       conectar: () => linked('sensor', 'cartografo'),
@@ -229,9 +251,10 @@ export class World {
       bancada: () => !!this.diary.milestones.primeira_bancada,
       verificador: () => linked('cartografo', 'verificador') && linked('verificador', 'plataforma'),
     };
-    while (!t.done && conds[TUTORIAL_STEPS[t.step]]()) {
+    const steps = tutorialSteps(t);
+    while (!t.done && conds[steps[t.step]]()) {
       t.step++;
-      if (t.step >= TUTORIAL_STEPS.length) t.done = true;
+      if (t.step >= steps.length) t.done = true;
     }
   }
 

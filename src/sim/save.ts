@@ -120,6 +120,7 @@ export function deserialize(data: unknown, map: GameMap): World {
   }
   const world = new World(map);
   world.time = num(d.time);
+  world.syncDiaryClock();
   if (typeof d.rng === 'number') world.rng.state = d.rng | 0;
   // Saves de antes do M5 já tinham agentes de Tier 1: começam com o Tier 1 liberado e sem drift.
   world.tier = d.version === 5 ? Math.max(0, Math.min(1, num(d.tier))) : 1;
@@ -143,7 +144,7 @@ export function deserialize(data: unknown, map: GameMap): World {
   const tut = d.tutorial as Partial<TutorialState> | null | undefined;
   world.tutorial =
     tut && typeof tut === 'object'
-      ? { step: Math.max(0, Math.floor(num(tut.step))), skipped: tut.skipped === true, done: tut.done === true }
+      ? { step: Math.max(0, Math.floor(num(tut.step))), skipped: tut.skipped === true, done: tut.done === true, ...(tut.variant === 'b' ? { variant: 'b' as const } : {}) }
       : null;
 
   if (Array.isArray(d.designs)) {
