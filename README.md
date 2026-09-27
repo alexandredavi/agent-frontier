@@ -2,6 +2,8 @@
 
 Jogo de automação com agentes de IA no planeta Kora-4. Protótipo em Phaser 3 + TypeScript.
 
+**Jogar no navegador:** https://alexandredavi.github.io/agent-frontier/
+
 Design completo: GDD "Agent Frontier — Game Design Doc (versão espacial)".
 
 ## Rodar
