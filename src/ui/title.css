@@ -1,0 +1,64 @@
+/* Tela de abertura: o planeta ao vivo ao fundo, menu em painel de nave à esquerda. */
+.title { position: fixed; inset: 0; z-index: 15; display: none; color: #e8ecf3; font: 14px/1.45 Inter, "Segoe UI", system-ui, sans-serif; }
+.title.open { display: block; }
+.t-shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5, 8, 13, 0.92) 0%, rgba(5, 8, 13, 0.75) 32%, rgba(5, 8, 13, 0.15) 62%, rgba(5, 8, 13, 0) 100%); pointer-events: none; }
+.t-col { position: absolute; left: clamp(16px, 5vw, 72px); top: 50%; transform: translateY(-50%); width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); display: flex; flex-direction: column; gap: 24px; }
+.t-logo .t-kicker { font-size: 11px; letter-spacing: 0.32em; color: #5ec8ff; }
+.t-logo h1 { margin: 8px 0 10px; font: 800 clamp(40px, 7vw, 72px)/0.92 Inter, "Segoe UI", system-ui, sans-serif; letter-spacing: 0.06em; color: #eaf7ff; text-shadow: 0 0 24px rgba(94, 200, 255, 0.35), 0 2px 0 rgba(0, 0, 0, 0.6); }
+.t-logo p { margin: 0; color: #9aa6b8; max-width: 420px; }
+
+.t-panel { position: relative; background: rgba(10, 15, 23, 0.9); border: 1px solid rgba(58, 166, 216, 0.55);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px); }
+.t-panel::before { content: ""; position: absolute; left: 0; top: 0; width: 34px; height: 22px; pointer-events: none;
+  background:
+    linear-gradient(135deg, transparent 10.5px, #5ec8ff 10.5px, #5ec8ff 12.5px, transparent 12.5px) 0 0 / 12px 12px no-repeat,
+    linear-gradient(#5ec8ff, #5ec8ff) 12px 0 / 22px 2px no-repeat,
+    linear-gradient(#5ec8ff, #5ec8ff) 0 12px / 2px 10px no-repeat; }
+
+.t-menu { display: flex; flex-direction: column; padding: 10px; gap: 6px; max-width: 420px; }
+.t-menu button { all: unset; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; padding: 11px 14px; cursor: pointer; border: 1px solid transparent; }
+.t-menu button b { font-size: 16px; letter-spacing: 0.04em; }
+.t-menu button small { color: #8b95a7; font-size: 12px; }
+.t-menu button:hover:not([disabled]), .t-menu button:focus-visible { background: #0f2a3d; border-color: #3aa6d8; }
+.t-menu button:first-child:not([disabled]) b { color: #5ec8ff; }
+.t-menu button[disabled] { opacity: 0.4; cursor: default; }
+
+.t-slots { display: flex; flex-direction: column; min-height: 0; max-height: calc(100vh - 260px); }
+.t-slots header { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 16px 8px; }
+.t-slots h2 { margin: 0; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: #5ec8ff; }
+.t-slots header span { font: 12px "JetBrains Mono", Consolas, monospace; color: #8b95a7; }
+.t-note { margin: 0 16px 8px; color: #f5b041; font-size: 12px; }
+.t-list { overflow-y: auto; padding: 0 10px; display: flex; flex-direction: column; gap: 4px; }
+.t-row { display: grid; grid-template-columns: 96px 1fr auto; gap: 12px; align-items: center; padding: 8px; border: 1px solid rgba(58, 166, 216, 0.14); background: rgba(14, 21, 32, 0.6); }
+.t-row.last { border-color: rgba(94, 200, 255, 0.5); }
+.t-row.empty { opacity: 0.6; }
+.t-thumb { width: 96px; height: 51px; background: #070b11; border: 1px solid #16283a; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.t-thumb img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.t-info { min-width: 0; display: flex; flex-direction: column; }
+.t-info b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t-info em { font-style: normal; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #5ec8ff; }
+.t-info small { color: #8b95a7; font-size: 11.5px; }
+.t-acts { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; max-width: 200px; }
+.t-slots footer { padding: 10px 16px 14px; }
+.title button:not(.t-menu button) { font: 12px Inter, "Segoe UI", system-ui, sans-serif; color: #e8ecf3; background: #0e1520; border: 1px solid #22384a; padding: 5px 10px; cursor: pointer;
+  clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px); }
+.title button:not(.t-menu button):hover { background: #16222f; border-color: #3b6a86; }
+.title .t-slots button.primary { border-color: #5ec8ff; color: #5ec8ff; }
+.title .t-slots button.danger { color: #f87171; border-color: rgba(248, 113, 113, 0.5); }
+.t-foot { position: absolute; left: clamp(16px, 5vw, 72px); bottom: 14px; color: #5f6b7f; font-size: 11px; }
+
+/* Durante a tela de abertura, esconde o que é do jogo */
+body.title-mode .tut, body.title-mode .insp, body.title-mode .hovercard, body.title-mode .ws, body.title-mode .victory { display: none !important; }
+
+@media (max-width: 640px) {
+  .t-row { grid-template-columns: 64px 1fr; }
+  .t-thumb { width: 64px; height: 34px; }
+  .t-acts { grid-column: 1 / -1; max-width: none; justify-content: flex-start; }
+  .t-shade { background: rgba(5, 8, 13, 0.82); }
+}
+.t-col.compact { gap: 14px; }
+.t-col.compact .t-logo h1 { font-size: clamp(28px, 4vw, 40px); margin: 4px 0 0; }
+.t-col.compact .t-logo br { display: none; }
+.t-col.compact .t-logo p { display: none; }
+.t-col.compact .t-slots { max-height: calc(100vh - 150px); }
+.t-foot[hidden] { display: none; }

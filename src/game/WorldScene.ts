@@ -168,15 +168,18 @@ export class WorldScene extends Phaser.Scene {
 
     this.rebuildViews();
     this.setupInput();
+    this.onMode();
     this.state.describeAgent = (a) => this.describe(a);
 
     this.state.events.on('world-replaced', this.onWorldReplaced, this);
     this.state.events.on('pin', this.onPin, this);
     this.state.events.on('focus-agent', this.onFocus, this);
+    this.state.events.on('mode', this.onMode, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.state.events.off('world-replaced', this.onWorldReplaced, this);
       this.state.events.off('pin', this.onPin, this);
       this.state.events.off('focus-agent', this.onFocus, this);
+      this.state.events.off('mode', this.onMode, this);
     });
 
     const save = () => writeSave(this.state.world);
@@ -193,10 +196,12 @@ export class WorldScene extends Phaser.Scene {
     if (this.state.clock.speed > 0) this.animClock += realDt * Math.min(2, this.state.clock.speed);
 
     this.frameDt = realDt;
+    const title = this.state.mode !== 'play';
+    if (title) this.titleDrift(realDt);
     // Agente sob o cursor (contorno e contadores)
     const ap = this.input.activePointer;
     const awp = this.cameras.main.getWorldPoint(ap.x, ap.y);
-    this.hoverId = this.state.isOverUI(ap.x, ap.y) ? undefined : this.agentAtWorld(awp.x, awp.y)?.id;
+    this.hoverId = title || this.state.isOverUI(ap.x, ap.y) ? undefined : this.agentAtWorld(awp.x, awp.y)?.id;
 
     // Agentes novos (construídos agora) entram com o drone; removidos saem desmontando
     for (const a of world.agents.values()) if (!this.views.has(a.id)) this.addView(a, true);
@@ -220,7 +225,11 @@ export class WorldScene extends Phaser.Scene {
     this.ambient(realDt);
     this.applyOcclusion();
     this.drawLinks();
-    this.drawOverlay();
+    if (title) {
+      this.over.clear();
+      this.tip.setVisible(false);
+      this.cardWanted = false;
+    } else this.drawOverlay();
     if (!this.cardWanted) this.card.hide();
 
     this.sinceSave += realDt * 1000;
@@ -231,6 +240,39 @@ export class WorldScene extends Phaser.Scene {
   }
 
   // ---------- terreno e terraformação ----------
+
+  private titleClock = 0;
+
+  /** Tela de abertura: câmera passeia sozinha e a cena não aceita comandos; jogando: volta ao ponto de pouso. */
+  private onMode(): void {
+    const play = this.state.mode === 'play';
+    this.input.enabled = play;
+    if (this.input.keyboard) this.input.keyboard.enabled = play;
+    const cam = this.cameras.main;
+    this.moving = null;
+    this.dragFrom = null;
+    this.panning = false;
+    if (play) {
+      const land = toIso(LANDING_POINT.x + 1, LANDING_POINT.y + 1);
+      cam.setZoom(1);
+      cam.centerOn(land.x, land.y);
+    } else {
+      this.card.hide();
+      this.titleClock = 0;
+      cam.setZoom(0.9);
+    }
+  }
+
+  /** Passeio lento sobre a base (ou o ponto de pouso) durante a tela de abertura. */
+  private titleDrift(dt: number): void {
+    this.titleClock += dt;
+    const t = this.titleClock;
+    const land = toIso(LANDING_POINT.x + 1, LANDING_POINT.y + 1);
+    const cam = this.cameras.main;
+    // desloca o centro para a direita da tela (o menu fica à esquerda)
+    const off = (cam.width * 0.18) / cam.zoom;
+    cam.centerOn(land.x - off + Math.sin(t * 0.05) * 360, land.y + Math.sin(t * 0.083) * 150);
+  }
 
   private onPin(id: number | null): void {
     this.pinnedId = id;

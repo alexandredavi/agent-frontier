@@ -4,10 +4,11 @@ import { AGENT_DEFS, AGENT_SIZE, ARCA_PHASES, CAPSULE_KW, CATEGORIES, DRIFT_PP, 
 import { isMachine } from '../sim/designs';
 import type { Agent, AgentType, ResourceId } from '../sim/types';
 import { ANCHOR_X, ANCHOR_Y, FRAME_H, FRAME_W, artKey } from './iso/bake';
-import { TH, TW, toIso } from './iso/projection';
+import { drawMiniTerrain, miniFrame } from './iso/minimap';
+import { toIso } from './iso/projection';
 import { PALETTES, terraStage } from './iso/terrain';
 import { drawItem } from './icons';
-import { exportSave, importSave, writeSave } from './persistence';
+import { exportSave } from './persistence';
 import type { GameState } from './state';
 import { CATEGORY_COLOR, FONT, MONO, RESOURCE_COLOR, SHIP, UI, WARN, hex } from './theme';
 
@@ -180,6 +181,9 @@ export class UIScene extends Phaser.Scene {
     }
     this.setHelp(sessions < 2);
 
+    this.state.events.on('mode', this.applyMode, this);
+    this.applyMode();
+
     this.scale.on('resize', this.layout, this);
     this.renderSlots();
     this.renderMinimap(terraStage(this.state.world.arca));
@@ -187,7 +191,18 @@ export class UIScene extends Phaser.Scene {
     this.layout();
   }
 
+  /** Na tela de abertura o HUD some e não aceita comandos. */
+  private applyMode(): void {
+    const play = this.state.mode === 'play';
+    this.cameras.main.setVisible(play);
+    this.input.enabled = play;
+    if (this.input.keyboard) this.input.keyboard.enabled = play;
+    if (!play) this.slotTip?.setVisible(false);
+    this.layout();
+  }
+
   update(): void {
+    if (this.state.mode !== 'play') return;
     const w = this.state.world;
     const stock = w.stockTotals();
     const defects = w.defectTotals();
@@ -495,17 +510,9 @@ export class UIScene extends Phaser.Scene {
       items.push(b.bg, b.text, b.hit);
     };
     mk(0, 'Exportar', () => exportSave(this.state.world));
-    mk(1, 'Importar', () => {
-      importSave(this.state.world.map)
-        .then((w) => {
-          this.state.replaceWorld(w);
-          writeSave(w);
-          this.state.toast('Save importado');
-        })
-        .catch(() => this.state.toast('Arquivo de save inválido'));
-    });
+    mk(1, 'Importar', () => this.state.events.emit('import'));
     mk(2, 'Diário', () => this.state.events.emit('diary-export'));
-    mk(3, 'Novo jogo', () => this.state.events.emit('new-game'));
+    mk(3, '☰ Menu', () => this.state.events.emit('menu'));
     this.savedText = this.add.text(width - 8, 52, 'Salvo', { fontFamily: MONO, fontSize: '11px', color: UI.muted }).setOrigin(1, 0).setAlpha(0);
     items.push(this.savedText);
     this.speedW = width;
@@ -576,26 +583,14 @@ export class UIScene extends Phaser.Scene {
   /** Terreno do minimapa: um losango por célula, com a paleta do estágio. */
   private renderMinimap(stage: number): void {
     const m = this.state.world.map;
-    const P = PALETTES[stage] ?? PALETTES[0];
-    const left = toIso(0, m.height).x, right = toIso(m.width, 0).x, top = toIso(0, 0).y, bottom = toIso(m.width, m.height).y;
-    const k = Math.min((MM_W - 16) / (right - left), (MM_H - 16) / (bottom - top));
-    this.mmLeft = left;
-    this.mmTop = top;
-    this.mmK = k;
-    const cw = Math.ceil((right - left) * k), ch = Math.ceil((bottom - top) * k);
+    const f = miniFrame(m, MM_W - 16, MM_H - 16);
+    this.mmLeft = f.left;
+    this.mmTop = f.top;
+    this.mmK = f.k;
     const canvas = document.createElement('canvas');
-    canvas.width = cw;
-    canvas.height = ch;
-    const c = canvas.getContext('2d')!;
-    const col: Record<string, string> = { planicie: P.plain[0], cratera: P.crater[1], serra: P.ridge[1], rocha: P.rock, nevoa: P.fog };
-    for (let y = 0; y < m.height; y++) {
-      for (let x = 0; x < m.width; x++) {
-        const p = toIso(x + 0.5, y + 0.5);
-        const px = (p.x - left) * k, py = (p.y - top) * k, hw = (TW * k) / 2 + 0.3, hh = (TH * k) / 2 + 0.3;
-        c.fillStyle = col[m.terrainAt(x, y) ?? 'nevoa'];
-        c.beginPath(); c.moveTo(px, py - hh); c.lineTo(px + hw, py); c.lineTo(px, py + hh); c.lineTo(px - hw, py); c.closePath(); c.fill();
-      }
-    }
+    canvas.width = f.width;
+    canvas.height = f.height;
+    drawMiniTerrain(canvas.getContext('2d')!, m, PALETTES[stage] ?? PALETTES[0], f);
     const key = `minimap-${++this.mmSeq}`;
     this.textures.addCanvas(key, canvas);
     const old = this.mmImage;
@@ -644,6 +639,10 @@ export class UIScene extends Phaser.Scene {
 
   private layout(): void {
     if (!this.hotbar || !this.helpGroup || !this.mmGroup) return;
+    if (this.state.mode !== 'play') {
+      this.state.uiRects = [];
+      return;
+    }
     const { width, height } = this.scale;
     const hbW = SLOTS * SLOT + (SLOTS - 1) * SLOT_GAP + 24;
     const hbH = TAB_H + SLOT + 24;

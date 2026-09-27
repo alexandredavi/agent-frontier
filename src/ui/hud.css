@@ -94,3 +94,6 @@
 i.res { display: inline-block; width: 9px; height: 9px; background: var(--c); flex: none; }
 i.res.m { border-radius: 50%; }
 i.res.d { transform: rotate(45deg) scale(0.85); }
+.modal input[type=text] { width: 100%; box-sizing: border-box; margin: 0 0 16px; font: 14px Inter, "Segoe UI", system-ui, sans-serif; color: #e8ecf3; background: #070b11; border: 1px solid #22384a; padding: 8px 10px; outline: none; }
+.modal input[type=text]:focus { border-color: var(--accent); }
+.modal { z-index: 40; }
