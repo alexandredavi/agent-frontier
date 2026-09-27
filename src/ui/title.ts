@@ -141,7 +141,7 @@ export class TitleScreen {
         const name = await promptDialog('Novo jogo', 'Nome da colônia', `Colônia ${n}`, 'Começar');
         if (!name) return;
         const free = freeSlot();
-        if (free >= 0) return this.start(new World(this.map), free, name);
+        if (free >= 0) return this.start(this.freshWorld(), free, name);
         this.pick = { kind: 'new', name };
         this.view = 'slots';
         this.note = 'Os 10 espaços estão ocupados: escolha um para substituir.';
@@ -179,7 +179,7 @@ export class TitleScreen {
           ]);
           if (ok !== 'ok') return;
         }
-        return p.kind === 'new' ? this.start(new World(this.map), i, p.name) : this.start(p.world, i, p.name);
+        return p.kind === 'new' ? this.start(this.freshWorld(), i, p.name) : this.start(p.world, i, p.name);
       }
       case 'rename': {
         const m = listSlots()[i];
@@ -216,6 +216,14 @@ export class TitleScreen {
       return this.render();
     }
     this.start(w, i);
+  }
+
+  /** Mundo novo com semente própria (cada partida sorteia outras alucinações); a semente fica no Diário para reproduzir a sessão. */
+  private freshWorld(): World {
+    const w = new World(this.map);
+    w.rng.state = (Math.random() * 2 ** 32) | 0;
+    w.diary.counts.semente = w.rng.state >>> 0;
+    return w;
   }
 
   private start(world: World, slot: number, name?: string): void {

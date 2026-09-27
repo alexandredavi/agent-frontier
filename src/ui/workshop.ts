@@ -31,6 +31,8 @@ const fmt = (n: number, d = 1) => n.toLocaleString('pt-BR', { maximumFractionDig
 export class Workshop {
   readonly root: HTMLDivElement;
   private selectedId: string;
+  /** Agente com o cartão fixado no mapa (a Oficina abre na versão dele). */
+  private pinnedId: number | null = null;
   private draft: Draft | null = null;
   private bench: Bench = { running: false, progress: 0 };
   /** Recalibração em andamento (animação da bancada com dados novos). */
@@ -49,12 +51,14 @@ export class Workshop {
     this.root.addEventListener('keyup', (e) => e.stopPropagation());
     this.root.addEventListener('wheel', (e) => e.stopPropagation());
     document.body.appendChild(this.root);
-    this.selectedId = state.world.activeDesign.analista ?? 'f-analista';
+    this.selectedId = this.defaultSelection();
+    state.events.on('pin', (id: number | null) => (this.pinnedId = id));
     state.events.on('workshop-toggle', () => this.toggle());
     state.events.on('world-replaced', () => {
       this.draft = null;
       this.ask = null;
-      this.selectedId = 'f-analista';
+      this.pinnedId = null;
+      this.selectedId = this.defaultSelection();
       this.render();
     });
   }
@@ -69,10 +73,22 @@ export class Workshop {
   }
 
   open(): void {
+    // Abre na versão do agente fixado; senão, evita começar numa versão travada (ex.: Analista antes do Tier 1)
+    const pinned = this.pinnedId !== null ? this.world.agents.get(this.pinnedId) : undefined;
+    if (pinned?.designId && this.world.designs.has(pinned.designId)) this.selectedId = pinned.designId;
+    else {
+      const cur = this.world.designs.get(this.selectedId);
+      if (!cur || !this.world.designUnlocked(cur)) this.selectedId = this.defaultSelection();
+    }
     this.root.classList.add('open');
     this.world.mark('oficina_aberta');
     this.render();
     this.state.events.emit('overlay', true);
+  }
+
+  /** Versão inicial: a do Cartógrafo na barra (o que a MERIDIAN pede no passo da bancada). */
+  private defaultSelection(): string {
+    return this.state.world.activeDesign.cartografo ?? 'f-cartografo';
   }
 
   close(): void {
@@ -200,7 +216,7 @@ export class Workshop {
   render(): void {
     if (!this.isOpen) return;
     const w = this.world;
-    const sel = w.designs.get(this.selectedId) ?? w.designs.get('f-analista')!;
+    const sel = w.designs.get(this.selectedId) ?? w.designs.get(this.defaultSelection())!;
     this.selectedId = sel.id;
 
     const list = MACHINE_ROLES.map((role) => {
