@@ -138,6 +138,7 @@ export function deserialize(data: unknown, map: GameMap): World {
   const diary = d.diary as Partial<Diary> | undefined;
   if (diary && typeof diary.startedAt === 'string' && diary.milestones && diary.counts && Array.isArray(diary.samples)) {
     world.diary = { startedAt: diary.startedAt, milestones: diary.milestones, counts: diary.counts, samples: diary.samples.slice(-600) };
+    if (typeof diary.seed === 'number') world.diary.seed = diary.seed >>> 0;
   }
   const tut = d.tutorial as Partial<TutorialState> | null | undefined;
   world.tutorial =

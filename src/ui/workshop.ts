@@ -3,6 +3,7 @@ import { type BenchResult, runBench } from '../sim/bench';
 import { AGENT_DEFS, recipeText } from '../sim/defs';
 import { CARDS, CORES, type CardId, type CoreId, type Design, MACHINE_ROLES, TOOLS, type ToolId, designStats } from '../sim/designs';
 import { Rng } from '../sim/rng';
+import { initialWorkshopDesign } from '../sim/workshopSelection';
 import type { AgentType } from '../sim/types';
 import type { GameState } from '../game/state';
 
@@ -31,6 +32,10 @@ const fmt = (n: number, d = 1) => n.toLocaleString('pt-BR', { maximumFractionDig
 export class Workshop {
   readonly root: HTMLDivElement;
   private selectedId: string;
+  /** Agente com o cartão fixado no mapa (a Oficina abre na versão dele). */
+  private pinnedId: number | null = null;
+  /** Houve um evento de pin desde a última abertura (reabrir sem fixar nada preserva a navegação). */
+  private pinFresh = false;
   private draft: Draft | null = null;
   private bench: Bench = { running: false, progress: 0 };
   /** Recalibração em andamento (animação da bancada com dados novos). */
@@ -49,12 +54,18 @@ export class Workshop {
     this.root.addEventListener('keyup', (e) => e.stopPropagation());
     this.root.addEventListener('wheel', (e) => e.stopPropagation());
     document.body.appendChild(this.root);
-    this.selectedId = state.world.activeDesign.analista ?? 'f-analista';
+    this.selectedId = initialWorkshopDesign(state.world, null, null);
+    state.events.on('pin', (id: number | null) => {
+      this.pinnedId = id;
+      this.pinFresh = true;
+    });
     state.events.on('workshop-toggle', () => this.toggle());
     state.events.on('world-replaced', () => {
       this.draft = null;
       this.ask = null;
-      this.selectedId = 'f-analista';
+      this.pinnedId = null;
+      this.pinFresh = false;
+      this.selectedId = initialWorkshopDesign(this.world, null, null);
       this.render();
     });
   }
@@ -69,6 +80,9 @@ export class Workshop {
   }
 
   open(): void {
+    // Pin novo manda na seleção; o mesmo pin de antes não desfaz a navegação. Nunca abre numa versão travada.
+    this.selectedId = initialWorkshopDesign(this.world, this.pinFresh ? this.pinnedId : null, this.selectedId);
+    this.pinFresh = false;
     this.root.classList.add('open');
     this.world.mark('oficina_aberta');
     this.render();
@@ -200,7 +214,7 @@ export class Workshop {
   render(): void {
     if (!this.isOpen) return;
     const w = this.world;
-    const sel = w.designs.get(this.selectedId) ?? w.designs.get('f-analista')!;
+    const sel = w.designs.get(this.selectedId) ?? w.designs.get(initialWorkshopDesign(w, null, null))!;
     this.selectedId = sel.id;
 
     const list = MACHINE_ROLES.map((role) => {
