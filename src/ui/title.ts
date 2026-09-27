@@ -218,11 +218,12 @@ export class TitleScreen {
     this.start(w, i);
   }
 
-  /** Mundo novo com semente própria (cada partida sorteia outras alucinações); a semente fica no Diário para reproduzir a sessão. */
+  /** Mundo novo com semente própria (cada partida sorteia outras alucinações); a semente inicial fica registrada no Diário. */
   private freshWorld(): World {
     const w = new World(this.map);
-    w.rng.state = (Math.random() * 2 ** 32) | 0;
-    w.diary.counts.semente = w.rng.state >>> 0;
+    const seed = (Math.random() * 2 ** 32) >>> 0;
+    w.rng.state = seed | 0;
+    w.diary.seed = seed;
     return w;
   }
 

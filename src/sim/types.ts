@@ -142,6 +142,8 @@ export interface Diary {
   /** Marcos: primeira vez que algo aconteceu (tempo real em s desde o início e tempo de jogo em s). */
   milestones: Record<string, { real: number; game: number }>;
   counts: Record<string, number>;
+  /** Semente inicial do RNG do mundo (uint32); ausente em saves antigos e mundos de teste. */
+  seed?: number;
   /** Amostra a cada minuto de jogo. */
   samples: { game: number; agents: number; blocked: number; power: number; stock: number; defects: number }[];
 }
