@@ -8,8 +8,9 @@ import { ANCHOR_X, ANCHOR_Y, FRAMES, FRAME_H, FRAME_W, artKey, bakeArt, frameCou
 import { type Pickable, TH, TW, cellAt, depthOf, footprintAt, isoCircle, pickFrontmost, toIso } from './iso/projection';
 import { PALETTES, renderHaze, renderTerrain, terraStage, visualHeight } from './iso/terrain';
 import { writeSave } from './persistence';
+import { HoverCard, esc } from '../ui/hovercard';
 import type { GameState } from './state';
-import { FONT, RESOURCE_COLOR, UI, WARN } from './theme';
+import { FONT, RESOURCE_COLOR, UI, WARN, hex } from './theme';
 
 interface AgentView {
   container: Phaser.GameObjects.Container;
@@ -96,7 +97,8 @@ export class WorldScene extends Phaser.Scene {
   fxMode: 'auto' | 'on' | 'off' = 'auto';
   private over!: Phaser.GameObjects.Graphics;
   private tip!: Phaser.GameObjects.Text;
-  private info!: Phaser.GameObjects.Text;
+  private card = new HoverCard();
+  private cardWanted = false;
   private dragFrom: number | null = null;
   private downAt = { x: 0, y: 0 };
   private moving: number | null = null;
@@ -155,12 +157,8 @@ export class WorldScene extends Phaser.Scene {
       .particles(0, 0, 'smoke', { emitting: false, lifespan: 750, speed: { min: 25, max: 75 }, angle: { min: 0, max: 360 }, scale: { start: 0.35, end: 1.1 }, alpha: { start: 0.55, end: 0 }, tint: 0xb89274 })
       .setDepth(9e5);
     this.over = this.add.graphics().setDepth(1e6);
-    const tipStyle = { fontFamily: FONT, fontSize: '12px', color: '#ffffff', backgroundColor: '#000000bb', padding: { x: 6, y: 3 } };
+    const tipStyle = { fontFamily: FONT, fontSize: '12px', color: '#e8f6ff', backgroundColor: '#0a1420ee', padding: { x: 7, y: 4 } };
     this.tip = this.add.text(0, 0, '', tipStyle).setDepth(1e6 + 1).setVisible(false);
-    this.info = this.add
-      .text(0, 0, '', { ...tipStyle, backgroundColor: '#141821ee', lineSpacing: 3, padding: { x: 8, y: 6 } })
-      .setDepth(1e6 + 1)
-      .setVisible(false);
 
     const cam = this.cameras.main;
     cam.setBounds(terr.left, terr.top, terr.canvas.width, terr.canvas.height);
@@ -174,9 +172,11 @@ export class WorldScene extends Phaser.Scene {
 
     this.state.events.on('world-replaced', this.onWorldReplaced, this);
     this.state.events.on('pin', this.onPin, this);
+    this.state.events.on('focus-agent', this.onFocus, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.state.events.off('world-replaced', this.onWorldReplaced, this);
       this.state.events.off('pin', this.onPin, this);
+      this.state.events.off('focus-agent', this.onFocus, this);
     });
 
     const save = () => writeSave(this.state.world);
@@ -221,6 +221,7 @@ export class WorldScene extends Phaser.Scene {
     this.applyOcclusion();
     this.drawLinks();
     this.drawOverlay();
+    if (!this.cardWanted) this.card.hide();
 
     this.sinceSave += realDt * 1000;
     if (this.sinceSave >= AUTOSAVE_MS) {
@@ -233,6 +234,15 @@ export class WorldScene extends Phaser.Scene {
 
   private onPin(id: number | null): void {
     this.pinnedId = id;
+  }
+
+  /** Leva a câmera até o agente (ex.: botão de alertas) e fixa o cartão dele. */
+  private onFocus(id: number): void {
+    const a = this.state.world.agents.get(id);
+    if (!a) return;
+    const p = this.groundOf(a, 30);
+    this.cameras.main.pan(p.x, p.y, 450, 'Sine.easeInOut');
+    this.state.events.emit('pin', id);
   }
 
   private onWorldReplaced(): void {
@@ -845,7 +855,7 @@ export class WorldScene extends Phaser.Scene {
     const g = this.over;
     g.clear();
     this.tip.setVisible(false);
-    this.info.setVisible(false);
+    this.cardWanted = false;
 
     const p = this.input.activePointer;
     const cam = this.cameras.main;
@@ -934,11 +944,12 @@ export class WorldScene extends Phaser.Scene {
     if (hoverAgent) {
       const c = this.groundOf(hoverAgent);
       g.lineStyle(2, UI.accent, 0.9).strokePoints(this.diamondPts(c.x, c.y, TW * AGENT_SIZE + 4, TH * AGENT_SIZE + 2), true);
-      this.info.setText(this.describe(hoverAgent)).setScale(zoomFix).setVisible(true);
-      // Abre à direita do agente; perto da borda direita da tela, abre à esquerda
-      const iw = this.info.width * zoomFix;
-      const right = c.x + 70 * zoomFix + iw > cam.worldView.right - 8;
-      this.info.setPosition(right ? c.x - 70 * zoomFix - iw : c.x + 70 * zoomFix, Math.max(cam.worldView.top + 8, c.y - ART_HEIGHT[artType(hoverAgent.type)] - 10));
+      // Cartão rico (HTML); o cartão fixo (clique) mostra o texto técnico completo
+      if (hoverAgent.id !== this.pinnedId) {
+        const sx = (c.x - cam.worldView.x) * cam.zoom, sy = (c.y - ART_HEIGHT[artType(hoverAgent.type)] * 0.6 - cam.worldView.y) * cam.zoom;
+        this.card.show(() => this.cardHtml(hoverAgent), sx, sy, 70 * cam.zoom);
+        this.cardWanted = true;
+      }
       return;
     }
     if (this.hoveredConnectionId() !== undefined) {
@@ -970,6 +981,62 @@ export class WorldScene extends Phaser.Scene {
   private footprintUnder(wx: number, wy: number) {
     const g = this.groundPoint(wx, wy);
     return footprintAt(g.x, g.y);
+  }
+
+  /** Conteúdo do cartão rico: cabeçalho com estado, barras e entradas/saídas com ícones. */
+  private cardHtml(a: Agent): string {
+    const def = AGENT_DEFS[a.type];
+    const w = this.state.world;
+    const design = w.designOf(a);
+    const stuck = a.status === 'bloqueado' && a.stalledFor >= STALL_ALERT;
+    const st = stuck ? 'alerta' : a.status;
+    const chip = { ok: ['Funcionando', 'ok'], ocioso: ['Ocioso', 'idle'], bloqueado: ['Bloqueado', 'warn'], alerta: ['Travado', 'bad'] }[st];
+    const name = design ? design.name.replace(/\s+v\d+$/, '') : def.name;
+    const res = (r: string) => {
+      const R = RESOURCES[r as keyof typeof RESOURCES];
+      const col = hex(RESOURCE_COLOR[r as keyof typeof RESOURCE_COLOR]);
+      return `<i class="res ${R.kind === 'dados' ? 'd' : 'm'}" style="--c:${col}"></i>${esc(R.name)}`;
+    };
+    const bar = (label: string, frac: number, text: string, cls = '') =>
+      `<div class="hc-bar ${cls}"><span>${label}</span><div><b style="width:${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%"></b></div><em>${text}</em></div>`;
+    const out: string[] = [];
+    out.push(`<header><strong>${esc(name)}</strong>${design ? `<span class="ver">v${design.version}</span>` : ''}<span class="chip ${chip[1]}">${chip[0]}</span></header>`);
+    if (a.refusing) out.push(`<p class="warn">⚠ Recebendo item que não usa: ${esc(RESOURCES[a.refusing].name)}</p>`);
+    if (design && (def.recipe || a.type === 'verificador')) {
+      const r = w.reliabilityBreakdown(a);
+      const real = Math.round(r.real);
+      out.push(bar(a.type === 'verificador' ? 'Detecção' : 'Confiab.', real / 100, `${real}%`, real >= 90 ? 'good' : real >= 75 ? 'mid' : 'low'));
+      const mods: string[] = [];
+      if (r.biome) mods.push(`bioma −${r.biome}`);
+      if (r.drift) mods.push(`drift −${r.drift}`);
+      if (r.xp) mods.push(`exp. +${r.xp}`);
+      if (mods.length) out.push(`<p class="mods">bancada ${Math.round(r.design)}% · ${mods.join(' · ')}</p>`);
+    }
+    if (def.recipe) {
+      if (a.running) out.push(bar('Ciclo', a.progress, `${Math.floor(a.progress * 100)}%`, 'cyc'));
+      const ins = Object.entries(def.recipe.inputs);
+      const io: string[] = [];
+      if (ins.length) io.push(`<div><span>Entra</span>${ins.map(([r, n]) => `<p>${res(r)} <b>${a.inputs[r as keyof typeof a.inputs] ?? 0}/${n! * INPUT_CYCLES}</b></p>`).join('')}</div>`);
+      const o = (a.type === 'extrator' ? a.resource : def.recipe.output.res) ?? a.resource;
+      if (o) io.push(`<div><span>Sai</span><p>${res(o)} <b>${design ? Math.round(w.stats(design.id).perMin * 10) / 10 : outputPerMin(a.type)}/min</b></p></div>`);
+      out.push(`<div class="hc-io">${io.join('')}</div>`);
+      const bad = a.defects + a.inherited;
+      out.push(`<p class="meta">Produzido <b>${a.produced}</b>${bad ? ` · defeituosos <b class="r">${bad}</b>` : ''} · ${Math.round(w.agentPower(a) * 10) / 10} kW</p>`);
+    }
+    if (a.type === 'verificador' && design) out.push(`<p class="meta">Pegos <b>${a.caught}</b> · passaram <b class="r">${a.missed}</b> · bons rejeitados <b>${a.falsePos}</b></p>`);
+    if (def.capacity > 0) out.push(bar(a.type === 'silo' ? 'Estoque' : 'Saída', a.buffer.length / def.capacity, `${a.buffer.length}/${def.capacity}`, a.buffer.length >= def.capacity ? 'low' : ''));
+    if (a.type === 'plataforma') {
+      const ph = ARCA_PHASES[w.arca.phase];
+      out.push(w.arca.done ? `<p class="meta">Arca: todas as fases concluídas</p>` : bar('Arca', w.arca.delivered / ph.n, `${w.arca.delivered}/${ph.n}`, 'arca'));
+    }
+    if (def.generates) out.push(`<p class="meta">Gera <b>${def.generates} kW</b></p>`);
+    if (a.type === 'descarte') out.push(`<p class="meta">Destruídos <b>${a.produced}</b></p>`);
+    const links: string[] = [];
+    if (def.maxIn > 0) links.push(`entradas ${w.inputsOf(a.id).length}/${def.maxIn}`);
+    if (def.maxOut > 0) links.push(`saídas ${w.outputsOf(a.id).length}/${def.maxOut}`);
+    if (links.length) out.push(`<p class="meta">${links.join(' · ')}</p>`);
+    out.push(`<footer>Clique: detalhes · ${def.maxIn + def.maxOut > 0 ? 'Arraste: conectar · ' : ''}M: mover · X: demolir</footer>`);
+    return out.join('');
   }
 
   private describe(a: Agent): string {

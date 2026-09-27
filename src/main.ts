@@ -12,6 +12,7 @@ import { confirmDialog } from './ui/modal';
 import { Tutorial } from './ui/tutorial';
 import { Victory } from './ui/victory';
 import { Workshop } from './ui/workshop';
+import './ui/hud.css';
 
 const map = GameMap.fromAscii(MAP_ROWS);
 const world = loadSave(map) ?? new World(map);

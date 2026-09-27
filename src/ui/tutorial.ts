@@ -22,7 +22,12 @@ export class Tutorial {
     this.root.className = 'tut';
     this.root.addEventListener('keydown', (e) => e.stopPropagation());
     document.body.appendChild(this.root);
-    state.events.on('hud-bottom', (y: number) => (this.root.style.top = `${y + 8}px`));
+    state.events.on('hud-bottom', (y: number) => {
+      this.root.style.top = `${y + 8}px`;
+      // não cobre a barra de construção em telas baixas
+      this.root.style.maxHeight = `calc(100vh - ${y + 8}px - 132px)`;
+      this.root.style.overflowY = 'auto';
+    });
     state.events.on('world-replaced', () => {
       this.lastKey = '';
       this.finishedShown = false;
