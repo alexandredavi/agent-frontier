@@ -1,0 +1,99 @@
+/* V5 · Painéis "de nave": vidro escuro, cantos chanfrados, borda ciano fina.
+   Carregado depois de workshop.css e sobrescreve o visual plano. */
+:root {
+  --glass: rgba(10, 15, 23, 0.9);
+  --glass-solid: rgba(10, 15, 23, 0.97);
+  --edge: rgba(58, 166, 216, 0.55);
+  --edge-strong: #3aa6d8;
+  --accent: #5ec8ff;
+  --text: #e8ecf3;
+  --muted: #8b95a7;
+  --ok: #4ade80;
+  --warn: #f5b041;
+  --bad: #f87171;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --cut: 10px;
+}
+
+.ws, .insp, .tut, .modal .card, .victory .card, .hovercard {
+  border-radius: 0;
+  border: 1px solid var(--edge);
+  background: var(--glass-solid);
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  box-shadow: none;
+  position: fixed;
+}
+/* traço de destaque no canto superior esquerdo */
+.ws::before, .insp::before, .tut::before, .modal .card::before, .victory .card::before, .hovercard::before {
+  content: ""; position: absolute; left: 0; top: 0; width: 28px; height: 20px; pointer-events: none;
+  background:
+    linear-gradient(135deg, transparent calc(var(--cut) - 1.5px), var(--accent) calc(var(--cut) - 1.5px), var(--accent) calc(var(--cut) + 0.5px), transparent calc(var(--cut) + 0.5px)) 0 0 / var(--cut) var(--cut) no-repeat,
+    linear-gradient(var(--accent), var(--accent)) var(--cut) 0 / 18px 2px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 0 var(--cut) / 2px 10px no-repeat;
+}
+.modal .card, .victory .card { position: relative; }
+.victory .card::before { --accent: #fb923c; }
+.victory .card { border-color: rgba(251, 146, 60, 0.6); }
+
+.ws header h2, .tut .kicker, .victory .kicker, .ws h3 { letter-spacing: 0.14em; font-size: 10px; }
+.ws header { border-bottom-color: rgba(58, 166, 216, 0.25); }
+.insp header { border-bottom-color: rgba(58, 166, 216, 0.25); }
+.insp header b { letter-spacing: 0.06em; font-size: 11px; color: var(--accent); }
+
+.ws button, .modal button, .tut button, .insp button, .victory button {
+  border-radius: 0; background: #0e1520; border: 1px solid #22384a;
+  clip-path: polygon(5px 0, 100% 0, 100% calc(100% - 5px), calc(100% - 5px) 100%, 0 100%, 0 5px);
+}
+.ws button:hover:not(:disabled), .modal button:hover, .tut button:hover { background: #16222f; border-color: #3b6a86; }
+.ws button.primary, .modal button.primary { border-color: var(--accent); color: var(--accent); }
+.ws button.on { border-color: var(--accent); background: #0f2a3d; }
+.ws .x, .insp header button { clip-path: none; background: none; border: none; }
+.ws .list, .ws .slot, .ws input[type=text], .ws .ask { border-radius: 0; }
+.ws .row { border-radius: 0; }
+.ws .row.sel, .ws .row:hover { background: #0f2a3d; }
+.ws table td:not(:first-child), .victory td:last-child, .insp pre { font-family: var(--mono); }
+.ws .bar { border-radius: 0; height: 5px; }
+.insp pre { font-size: 11.5px; }
+
+/* ---------- cartão rico (hover) ---------- */
+.hovercard {
+  left: 0; top: 0; width: 272px; display: none; z-index: 8; pointer-events: none;
+  padding: 10px 12px 8px; color: var(--text); font: 12px/1.4 Inter, "Segoe UI", system-ui, sans-serif;
+  background: var(--glass);
+}
+.hovercard.open { display: block; }
+.hovercard header { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.hovercard header strong { font-size: 13px; letter-spacing: 0.02em; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hovercard .ver { font: 11px var(--mono); color: var(--accent); }
+.hovercard .chip { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 1px 6px; border: 1px solid currentColor; }
+.hovercard .chip.ok { color: var(--ok); }
+.hovercard .chip.idle { color: #94a3b8; }
+.hovercard .chip.warn { color: var(--warn); }
+.hovercard .chip.bad { color: var(--bad); animation: hcblink 0.8s steps(2) infinite; }
+@keyframes hcblink { 50% { opacity: 0.45; } }
+.hc-bar { display: grid; grid-template-columns: 62px 1fr 52px; align-items: center; gap: 8px; margin: 4px 0; }
+.hc-bar span { color: var(--muted); font-size: 11px; }
+.hc-bar div { height: 6px; background: #0a1018; position: relative; }
+.hc-bar div b { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.hc-bar.good div b { background: var(--ok); }
+.hc-bar.mid div b { background: var(--warn); }
+.hc-bar.low div b { background: var(--bad); }
+.hc-bar.cyc div b { background: #a5b4fc; }
+.hc-bar.arca div b { background: #fb923c; }
+.hc-bar em { font: normal 11px var(--mono); text-align: right; }
+.hovercard .mods { margin: -2px 0 4px 70px; color: var(--muted); font-size: 10.5px; }
+.hovercard .warn { margin: 0 0 6px; color: var(--warn); font-size: 11px; }
+.hc-io { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0 4px; padding: 6px 0; border-top: 1px solid rgba(58, 166, 216, 0.18); border-bottom: 1px solid rgba(58, 166, 216, 0.18); }
+.hc-io span { display: block; color: var(--muted); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 2px; }
+.hc-io p { margin: 1px 0; display: flex; align-items: center; gap: 5px; font-size: 11.5px; }
+.hc-io b { margin-left: auto; font: 11px var(--mono); color: #e8f6ff; }
+.hovercard .meta { margin: 4px 0; color: var(--muted); font-size: 11px; }
+.hovercard .meta b { font-family: var(--mono); color: var(--text); font-weight: 600; }
+.hovercard .meta b.r { color: var(--bad); }
+.hovercard footer { margin-top: 6px; color: #5f6b7f; font-size: 10.5px; }
+i.res { display: inline-block; width: 9px; height: 9px; background: var(--c); flex: none; }
+i.res.m { border-radius: 50%; }
+i.res.d { transform: rotate(45deg) scale(0.85); }
+.modal input[type=text] { width: 100%; box-sizing: border-box; margin: 0 0 16px; font: 14px Inter, "Segoe UI", system-ui, sans-serif; color: #e8ecf3; background: #070b11; border: 1px solid #22384a; padding: 8px 10px; outline: none; }
+.modal input[type=text]:focus { border-color: var(--accent); }
+.modal { z-index: 40; }

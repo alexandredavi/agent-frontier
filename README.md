@@ -30,6 +30,17 @@ O workflow `.github/workflows/pages.yml` testa, gera e publica o jogo a cada pus
 
 Cada `git push` depois disso atualiza o link. O save e o Diário ficam no navegador de cada jogador.
 
+## Tela de abertura e saves
+
+Ao abrir o jogo aparece a tela de abertura, com Kora-4 ao vivo ao fundo:
+
+- **Continuar**: abre o último save jogado.
+- **Novo jogo**: pede o nome da colônia e ocupa um dos **10 espaços de save** (cheio? escolha um para substituir).
+- **Carregar**: lista os 10 espaços com miniatura, fase da Arca, agentes, tempo de jogo e data. Dá para jogar, renomear, duplicar e apagar.
+- **Importar**: abre um save exportado (.json) num espaço livre.
+
+O jogo salva sozinho no espaço em uso a cada 10 s. No jogo, **☰ Menu** (topo) salva e volta para a abertura. Os saves ficam **neste navegador**: limpar os dados do site apaga tudo, então use **Exportar** para guardar cópias.
+
 ## Controles
 
 | Ação | Comando |
@@ -46,6 +57,9 @@ Cada `git push` depois disso atualiza o link. O save e o Diário ficam no navega
 | Mover câmera | Botão direito arrastando, ou `WASD` / setas |
 | Zoom | Roda do mouse |
 | Pausar / velocidade | `Espaço`, ou os botões ❚❚ 1× 2× 4× |
+| Atalhos na tela | `H` ou botão `?` no painel da Arca |
+| Minimapa | Clique ou arraste no minimapa (canto inferior direito) |
+| Ir ao próximo alerta | Botão "⚠ N alertas" no topo (leva a câmera e fixa o cartão) |
 
 ## Agentes
 
@@ -53,7 +67,8 @@ Cada `git push` depois disso atualiza o link. O save e o Diário ficam no navega
 | --- | --- |
 | Extração | Extrator (Gelo/Regolito 4 kW, Minério 6 kW) · Sensor (Telemetria) |
 | Processamento | Derretedor · Cartógrafo · Analista · Eletrolisador · Fundidor · Prensa · Construtor |
-| Logística | Silo · Divisor · Unificador · Descarte |
+| Logística | Silo · Divisor · Unificador · Descarte · Plataforma de Carga |
+| Qualidade | Verificador (na aba Processamento) |
 | Energia | Painel Solar (+20 kW) |
 
 Receitas e números: `src/sim/defs.ts`. Matéria anda nas linhas como círculos; dados, como losangos.
@@ -83,7 +98,11 @@ Agentes de IA (extração e processamento) são montados com **Núcleo + Ferrame
 - **Receitas:** cada ingrediente tem buffer para 2 ciclos; a máquina aceita até 2 entradas. Item que ela não usa é recusado e trava a linha.
 - **Energia:** rede global. A cápsula de pouso dá 10 kW; cada Painel Solar, 20 kW. Máquinas só consomem trabalhando. Faltou energia, extração e processamento rodam na proporção disponível.
 
-O jogo salva sozinho no navegador a cada 10 s. Use **Exportar/Importar** para backup em arquivo, **Novo jogo** para recomeçar e **Diário** para exportar as métricas do playtest (marcos, contagens e uma amostra por minuto de jogo).
+Use **Exportar/Importar** para backup em arquivo e **Diário** para exportar as métricas do playtest (marcos, contagens e uma amostra por minuto de jogo).
+
+## Visual
+
+Isométrico 2.5D gerado em código (sem arquivos de imagem): a arte dos agentes é desenhada em Canvas e "assada" em spritesheets na abertura (`src/game/iso/`). O relevo é só visual. A paleta e o céu mudam com as fases da Arca (Pouso → Posto avançado → Base). Esteiras de matéria são sólidas, com blocos; links de dados são feixes com pulsos de luz. O rodapé mostra o FPS; os efeitos de ambiente desligam sozinhos se o FPS cair.
 
 ## Estrutura
 
@@ -105,3 +124,5 @@ Depuração no console do navegador: `agentFrontier.state.world`.
 - [x] **M3** — receitas Tier 0/1, energia, Cordilheira Ferrosa, barra com abas
 - [x] **M4** — Oficina, cartões de diretiva, bancada de testes, versões e confiabilidade
 - [x] **M5** — Verificador, sujeira do bioma, experiência/drift, tiers e metas da Arca (MVP completo)
+- [x] **V1–V5** — visual isométrico: fundação, terreno e terraformação, agentes vivos, linhas e efeitos, interface
+- [x] Tela de abertura e 10 espaços de save

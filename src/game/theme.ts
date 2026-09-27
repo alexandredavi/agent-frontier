@@ -72,3 +72,13 @@ export const UI = {
 };
 
 export const hex = (n: number) => '#' + n.toString(16).padStart(6, '0');
+
+/** Números e atalhos. */
+export const MONO = '"JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace';
+
+/** Painéis "de nave" (V5). */
+export const SHIP = {
+  glass: 0x0a0f17,
+  glassAlpha: 0.86,
+  edge: 0x3aa6d8,
+};

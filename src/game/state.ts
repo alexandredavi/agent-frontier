@@ -13,6 +13,8 @@ export class GameState {
   readonly clock = new SimClock();
   readonly events = new Phaser.Events.EventEmitter();
   tool: Tool = { kind: 'none' };
+  /** 'title' = tela de abertura (mundo de fundo, sem salvar nem aceitar comandos); 'play' = jogando. */
+  mode: 'title' | 'play' = 'title';
   /** Aba ativa da barra de construção (índice em CATEGORIES). */
   tab = 0;
   /** Retângulos da UI em coordenadas de tela, para não construir por baixo dos painéis. */
@@ -52,6 +54,12 @@ export class GameState {
   replaceWorld(world: World): void {
     this.world = world;
     this.events.emit('world-replaced');
+  }
+
+  setMode(mode: 'title' | 'play'): void {
+    this.mode = mode;
+    document.body.classList.toggle('title-mode', mode === 'title');
+    this.events.emit('mode', mode);
   }
 
   toast(message: string): void {
