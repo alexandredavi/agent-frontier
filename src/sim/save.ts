@@ -3,7 +3,7 @@ import { CARDS, CORES, type CardId, type CoreId, type Design, TOOLS, type ToolId
 import type { GameMap } from './map';
 import { ARCA_PHASES } from './defs';
 import type { AgentType, ArcaState, Diary, Item, ResourceId, TutorialState } from './types';
-import { World } from './world';
+import { TUTORIAL_STEPS, World } from './world';
 
 export const SAVE_VERSION = 5;
 
@@ -83,6 +83,9 @@ export function serialize(world: World): SaveData {
 const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const isRes = (v: unknown): v is ResourceId => typeof v === 'string' && v in RESOURCES;
 const isType = (v: unknown): v is AgentType => typeof v === 'string' && v in AGENT_DEFS;
+/** Contadores nunca negativos (saves editados à mão ou corrompidos). */
+const count = (v: unknown): number => Math.max(0, Math.floor(num(v)));
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** Aceita item novo ({res, bad}) ou antigo (só o id do recurso). */
 function toItem(v: unknown): Item | null {
@@ -92,6 +95,7 @@ function toItem(v: unknown): Item | null {
 }
 
 function readDesign(raw: Record<string, unknown>): Design | null {
+  if (!raw || typeof raw !== 'object') return null;
   if (typeof raw.id !== 'string' || !isType(raw.role) || !isMachine(raw.role)) return null;
   const core = raw.core as CoreId;
   const tool = raw.tool as ToolId;
@@ -107,6 +111,19 @@ function readDesign(raw: Record<string, unknown>): Design | null {
     version: Math.max(2, Math.floor(num(raw.version, 2))),
     factory: false,
   };
+}
+
+function sanitizeLoaded(world: World): void {
+  const dy = world.diary;
+  if (!isObj(dy.milestones)) dy.milestones = {};
+  if (!isObj(dy.counts)) dy.counts = {};
+  dy.samples = dy.samples.filter(isObj);
+  if (typeof dy.startedAt !== 'string' || Number.isNaN(Date.parse(dy.startedAt))) dy.startedAt = new Date().toISOString();
+  const t = world.tutorial;
+  if (t && t.step >= TUTORIAL_STEPS.length) {
+    t.step = TUTORIAL_STEPS.length - 1;
+    t.done = true;
+  }
 }
 
 /**
@@ -162,18 +179,22 @@ export function deserialize(data: unknown, map: GameMap): World {
     for (const id of Object.values(d.active as Record<string, unknown>)) if (typeof id === 'string') world.setActive(id);
   }
 
+  // Save editado ou corrompido: campos trocados quebrariam o jogo depois (no próximo marco do Diário ou passo
+  // do tutorial). Antes de reconstruir os agentes (que já marcam o Diário), recomeça o que estiver inválido.
+  sanitizeLoaded(world);
+
   const idMap = new Map<number, number>();
   for (const raw of d.agents as Record<string, unknown>[]) {
-    if (!isType(raw.type)) continue;
+    if (!isObj(raw) || !isType(raw.type)) continue;
     const designId = typeof raw.designId === 'string' && world.designs.get(raw.designId)?.role === raw.type ? raw.designId : undefined;
     // Sem versão válida → a de fábrica (não a ativa), para não mudar agentes antigos
     const res = world.place(raw.type, num(raw.x, -1), num(raw.y, -1), designId ?? (isMachine(raw.type) ? `f-${raw.type}` : undefined));
     if (!res.ok) continue;
     const a = res.agent;
     const def = AGENT_DEFS[a.type];
-    a.produced = num(raw.produced);
-    a.defects = num(raw.defects);
-    a.inherited = num(raw.inherited ?? raw.wasted);
+    a.produced = count(raw.produced);
+    a.defects = count(raw.defects);
+    a.inherited = count(raw.inherited ?? raw.wasted);
     // v1/v2 guardavam a fração do próximo item em `acc`
     a.progress = Math.min(1, Math.max(0, num(raw.progress ?? raw.acc)));
     a.running = raw.running === true && !!def.recipe;
@@ -185,9 +206,9 @@ export function deserialize(data: unknown, map: GameMap): World {
     if (a.type === 'verificador') {
       a.queue = items(raw.queue, 2);
       a.rejects = items(raw.rejects, def.capacity);
-      a.caught = num(raw.caught);
-      a.falsePos = num(raw.falsePos);
-      a.missed = num(raw.missed);
+      a.caught = count(raw.caught);
+      a.falsePos = count(raw.falsePos);
+      a.missed = count(raw.missed);
     }
     if (def.recipe) {
       for (const [field, target] of [['inputs', a.inputs], ['badInputs', a.badInputs]] as const) {
@@ -206,13 +227,14 @@ export function deserialize(data: unknown, map: GameMap): World {
   // v1 (M1) não tinha conexões; o estoque global antigo é descartado.
   if (d.version !== 1 && Array.isArray(d.connections)) {
     for (const raw of d.connections as Record<string, unknown>[]) {
+      if (!isObj(raw)) continue;
       const from = idMap.get(num(raw.from, -1));
       const to = idMap.get(num(raw.to, -1));
       if (from === undefined || to === undefined) continue;
       const res = world.connect(from, to);
       if (!res.ok || !Array.isArray(raw.items)) continue;
       const items = (raw.items as Record<string, unknown>[])
-        .filter((i) => isRes(i.res))
+        .filter((i) => isObj(i) && isRes(i.res))
         .map((i) => ({ res: i.res as ResourceId, bad: i.bad === true, pos: Math.min(res.connection.length, Math.max(0, num(i.pos))) }))
         .sort((x, y) => y.pos - x.pos);
       let limit = res.connection.length;
