@@ -10,6 +10,12 @@ const INDEX_KEY = 'agent-frontier:slots:v2';
 const LAST_KEY = 'agent-frontier:last-slot';
 export const SLOT_COUNT = 10;
 
+/** Chamado quando o navegador recusa gravar um save (armazenamento cheio). */
+let onWriteError: (() => void) | null = null;
+export function onSaveError(cb: (() => void) | null): void {
+  onWriteError = cb;
+}
+
 export interface SlotMeta {
   name: string;
   savedAt: number;
@@ -90,6 +96,7 @@ export function writeSlot(i: number, world: World, opts: { name?: string; thumb?
     writeIndex(idx);
     return true;
   } catch {
+    onWriteError?.();
     return false;
   }
 }

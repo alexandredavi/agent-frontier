@@ -14,6 +14,8 @@ import { Tutorial } from './ui/tutorial';
 import { Victory } from './ui/victory';
 import { Workshop } from './ui/workshop';
 import './ui/hud.css';
+import { watchOtherTabs } from './game/multitab';
+import { currentSlot, onSaveError } from './game/persistence';
 
 const map = GameMap.fromAscii(MAP_ROWS);
 clearLegacySave();
@@ -41,6 +43,17 @@ function enter(world: World, slot: number, name?: string): void {
 }
 
 const title = new TitleScreen(state, map, { enter, importFile: () => importSave(map) });
+
+// Saves que se perderiam sem aviso: a mesma colônia aberta em outra aba, ou o navegador sem espaço
+watchOtherTabs(window, currentSlot, () =>
+  state.toast('Esta colônia também está aberta em outra aba. Feche uma delas: a última a salvar apaga o progresso da outra.'),
+);
+let lastSaveError = -Infinity;
+onSaveError(() => {
+  if (Date.now() - lastSaveError < 60_000) return;
+  lastSaveError = Date.now();
+  state.toast('Não foi possível salvar: armazenamento do navegador cheio. Use Exportar e apague saves antigos em Carregar.');
+});
 
 state.events.on('diary-export', () => exportDiary(state.world));
 

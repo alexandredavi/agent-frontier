@@ -3,7 +3,7 @@ import { GameMap } from '../sim/map';
 import { MAP_ROWS } from '../sim/mapData';
 import { World } from '../sim/world';
 import {
-  SLOT_COUNT, clearLegacySave, currentSlot, deleteSlot, duplicateSlot, freeSlot, lastSlot, listSlots, loadSlot, renameSlot, setCurrentSlot, setLastSlot, writeSave, writeSlot,
+  SLOT_COUNT, clearLegacySave, currentSlot, deleteSlot, duplicateSlot, freeSlot, lastSlot, listSlots, loadSlot, onSaveError, renameSlot, setCurrentSlot, setLastSlot, writeSave, writeSlot,
 } from './persistence';
 
 class MemStorage {
@@ -85,5 +85,16 @@ describe('10 espaços de save', () => {
   it('índice corrompido é tratado como vazio', () => {
     mem.setItem('agent-frontier:slots:v2', '{oops');
     expect(listSlots().every((m) => m === null)).toBe(true);
+  });
+
+  it('avisa quando o navegador recusa gravar (armazenamento cheio)', () => {
+    let errors = 0;
+    onSaveError(() => errors++);
+    mem.setItem = () => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    };
+    expect(writeSlot(0, new World(map), { name: 'Cheio' })).toBe(false);
+    expect(errors).toBe(1);
+    onSaveError(null);
   });
 });
