@@ -1,7 +1,7 @@
 import type { GameState } from '../game/state';
-import { TUTORIAL_STEPS } from '../sim/world';
+import { type TutorialStep, tutorialSteps } from '../sim/world';
 
-const TEXT: Record<(typeof TUTORIAL_STEPS)[number], { title: string; hint: string }> = {
+const TEXT: Record<TutorialStep, { title: string; hint: string }> = {
   sensor: { title: 'Construa um Sensor', hint: 'Aba Extração (Tab troca de aba), tecla 2. Clique num lugar livre do mapa. Sensores captam Telemetria em qualquer terreno.' },
   cartografo: { title: 'Construa um Cartógrafo', hint: 'Aba Processamento. Ele transforma 10 Telemetria em 1 Mapa de pouso.' },
   conectar: { title: 'Conecte o Sensor ao Cartógrafo', hint: 'Arraste do Sensor até o Cartógrafo (alcance de 12 células). Os losangos que andam na linha são dados.' },
@@ -59,12 +59,13 @@ export class Tutorial {
       });
       return;
     }
-    const items = TUTORIAL_STEPS.map((s, i) => {
+    const steps = tutorialSteps(t);
+    const items = steps.map((s, i) => {
       const cls = i < t.step ? 'done' : i === t.step ? 'cur' : '';
       return `<li class="${cls}">${i < t.step ? '✓ ' : ''}${TEXT[s].title}</li>`;
     }).join('');
-    const cur = TEXT[TUTORIAL_STEPS[t.step]];
-    this.root.innerHTML = `<div class="kicker">MERIDIAN · OBJETIVOS ${t.step + 1}/${TUTORIAL_STEPS.length}</div>
+    const cur = TEXT[steps[t.step]];
+    this.root.innerHTML = `<div class="kicker">MERIDIAN · OBJETIVOS ${t.step + 1}/${steps.length}</div>
       <p class="hint"><b>${cur.title}.</b> ${cur.hint}</p>
       <ol>${items}</ol>
       <div class="actions"><button data-skip>Pular tutorial</button></div>`;

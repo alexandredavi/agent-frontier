@@ -1,7 +1,7 @@
 import type { GameState } from '../game/state';
 import { SLOT_COUNT, type SlotMeta, deleteSlot, duplicateSlot, freeSlot, lastSlot, listSlots, loadSlot, renameSlot } from '../game/persistence';
 import type { GameMap } from '../sim/map';
-import { World } from '../sim/world';
+import { World, tutorialVariantFromSearch } from '../sim/world';
 import { esc } from './hovercard';
 import { confirmDialog, promptDialog } from './modal';
 import './title.css';
@@ -224,6 +224,8 @@ export class TitleScreen {
     const seed = (Math.random() * 2 ** 32) >>> 0;
     w.rng.state = seed | 0;
     w.diary.seed = seed;
+    // A/B do tutorial: o link com ?tut=b começa a partida na variante B (fica no save)
+    if (w.tutorial && tutorialVariantFromSearch(location.search) === 'b') w.tutorial.variant = 'b';
     return w;
   }
 
